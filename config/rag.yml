@@ -1,0 +1,10 @@
+chat_model_name: kimi-k2-turbo-preview
+embedding_model_name: local-embedding
+
+# Kimi 配置
+kimi_base_url: https://api.moonshot.cn/v1
+
+# DashScope 配置（用于在线 Embedding）
+
+# 本地 Embedding 路径（仅在本地部署时使用）
+embedding_local_path: "D:\\ai_models\\models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2\\snapshots\\e8f8c211226b894fcb81acc59f3b34ba3efd5f42"

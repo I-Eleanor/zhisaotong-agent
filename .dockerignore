@@ -1,0 +1,14 @@
+# 忽略文件和目录
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+chroma_db/
+logs/
+*.png
+*.pdf
+*.csv
+.env
+.DS_Store
+.git/
+.gitignore

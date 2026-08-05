@@ -1,0 +1,14 @@
+collection_name: agent
+persist_directory: chroma_db
+k: 5
+data_path: data
+md5_hex_store: md5.text
+allow_knowledge_file_type: ["txt", "pdf"]
+
+chunk_size: 500
+chunk_overlap: 80
+separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", "；", "；", " ", ""]
+
+reranker_enabled: false
+reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+reranker_top_k: 3
