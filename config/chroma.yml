@@ -9,6 +9,6 @@ chunk_size: 500
 chunk_overlap: 80
 separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", "；", "；", " ", ""]
 
-reranker_enabled: false
-reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+reranker_enabled: true
+reranker_model: D:\ai_models\cross-encoder-ms-marco-MiniLM-L-6-v2
 reranker_top_k: 3

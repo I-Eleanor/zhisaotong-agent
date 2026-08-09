@@ -2,7 +2,7 @@ import os
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from utils.config_handler import chroma_conf
-from model.factory import embed_model
+from model.factory import get_embed_model
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
@@ -10,11 +10,11 @@ from utils.logger_handler import logger
 
 
 class VectorStoreService:
-    def __init__(self):
+    def __init__(self, embedding_function=None, persist_directory: str = None, collection_name: str = None):
         self.vector_store = Chroma(
-            collection_name=chroma_conf["collection_name"],
-            embedding_function=embed_model,
-            persist_directory=chroma_conf["persist_directory"],
+            collection_name=collection_name or chroma_conf["collection_name"],
+            embedding_function=embedding_function or get_embed_model(),
+            persist_directory=persist_directory or chroma_conf["persist_directory"],
         )
 
         self.spliter = RecursiveCharacterTextSplitter(
@@ -24,8 +24,37 @@ class VectorStoreService:
             length_function=len,
         )
 
-    def get_retriever(self):
-        return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
+    @staticmethod
+    def _build_source_filter(source_files: list[str] | tuple[str, ...] | str | None) -> dict | None:
+        """构造 Chroma 元数据过滤条件，用于把检索范围限定在指定知识库文件内。"""
+        if not source_files:
+            return None
+
+        if isinstance(source_files, str):
+            source_files = [source_files]
+
+        source_files = [s for s in source_files if s]
+        if not source_files:
+            return None
+
+        if len(source_files) == 1:
+            return {"source_file": source_files[0]}
+
+        return {"source_file": {"$in": list(source_files)}}
+
+    def get_retriever(self, k: int = None, source_files: list[str] | str = None):
+        """获取检索器。
+
+        :param k: 召回数量，默认取配置中的 k
+        :param source_files: 可选，将检索范围限定在指定的知识库文件（用于诊断类定向检索）
+        """
+        search_kwargs = {"k": k or chroma_conf["k"]}
+
+        source_filter = self._build_source_filter(source_files)
+        if source_filter:
+            search_kwargs["filter"] = source_filter
+
+        return self.vector_store.as_retriever(search_kwargs=search_kwargs)
 
     @staticmethod
     def _enrich_metadata(documents: list[Document], file_path: str, chunk_index_offset: int = 0) -> list[Document]:

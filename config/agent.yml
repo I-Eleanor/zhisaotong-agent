@@ -1,1 +1,7 @@
 external_data_path: data/extermal/records.csv
+
+# 多轮对话分层记忆（对话 Agent 使用）
+memory:
+  max_rounds: 5            # 保留最近 N 轮完整对话
+  summary_enabled: true    # 超过 max_rounds 后，旧消息由 LLM 压缩为摘要
+  summary_max_chars: 300   # 摘要最大字符数

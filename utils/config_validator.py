@@ -11,9 +11,9 @@ class ConfigValidationError(Exception):
 
 def validate_env_vars() -> List[Tuple[str, str]]:
     errors = []
-    kimi_api_key = os.getenv("KIMI_API_KEY")
-    if not kimi_api_key or kimi_api_key == "your_kimi_api_key_here":
-        errors.append(("KIMI_API_KEY", "未设置或使用示例值"))
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not deepseek_api_key or deepseek_api_key == "your_deepseek_api_key_here":
+        errors.append(("DEEPSEEK_API_KEY", "未设置或使用示例值"))
 
     dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
     if rag_conf.get("embedding_model_name") == "dashscope-embedding":
@@ -61,9 +61,9 @@ def validate_model_config() -> List[Tuple[str, str]]:
     if not chat_model_name:
         errors.append(("chat_model_name", "配置项缺失"))
 
-    kimi_base_url = rag_conf.get("kimi_base_url")
-    if not kimi_base_url:
-        errors.append(("kimi_base_url", "配置项缺失"))
+    deepseek_base_url = rag_conf.get("deepseek_base_url")
+    if not deepseek_base_url:
+        errors.append(("deepseek_base_url", "配置项缺失"))
 
     embedding_model_name = rag_conf.get("embedding_model_name")
     if not embedding_model_name:
@@ -94,9 +94,9 @@ def validate_startup():
 
 def validate_before_use(config_type: str):
     if config_type == "chat_model":
-        api_key = os.getenv("KIMI_API_KEY")
-        if not api_key or api_key == "your_kimi_api_key_here":
-            raise ConfigValidationError("KIMI_API_KEY 未正确配置，无法使用聊天模型")
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key or api_key == "your_deepseek_api_key_here":
+            raise ConfigValidationError("DEEPSEEK_API_KEY 未正确配置，无法使用聊天模型")
 
     elif config_type == "embedding":
         model_name = rag_conf.get("embedding_model_name")

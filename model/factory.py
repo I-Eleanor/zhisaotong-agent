@@ -18,14 +18,14 @@ class BaseModelFactory(ABC):
 class ChatModelFactory(BaseModelFactory):
     def generator(self):
         validate_before_use("chat_model")
-        api_key = os.getenv("KIMI_API_KEY")
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            raise ValueError("KIMI_API_KEY 环境变量未设置，请检查 .env 文件")
+            raise ValueError("DEEPSEEK_API_KEY 环境变量未设置，请检查 .env 文件")
         return ChatOpenAI(
             model=rag_conf["chat_model_name"],
-            base_url=rag_conf["kimi_base_url"],
+            base_url=rag_conf["deepseek_base_url"],
             api_key=api_key,
-            temperature=0.7,
+            temperature=1,
         )
 
 
@@ -56,5 +56,41 @@ class EmbeddingsFactory(BaseModelFactory):
             raise ValueError(f"不支持的 embedding 模型: {rag_conf['embedding_model_name']}")
 
 
-chat_model = ChatModelFactory().generator()
-embed_model = EmbeddingsFactory().generator()
+_chat_model: Optional[BaseChatModel] = None
+_embed_model: Optional[Embeddings] = None
+
+
+def get_chat_model() -> BaseChatModel:
+    """获取全局对话模型（懒加载，首次调用时才真正创建）。"""
+    global _chat_model
+    if _chat_model is None:
+        _chat_model = ChatModelFactory().generator()
+    return _chat_model
+
+
+def get_embed_model() -> Embeddings:
+    """获取全局 Embedding 模型（懒加载，首次调用时才真正创建）。"""
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = EmbeddingsFactory().generator()
+    return _embed_model
+
+
+def reset_models() -> None:
+    """重置模型单例，主要供测试隔离使用。"""
+    global _chat_model, _embed_model
+    _chat_model = None
+    _embed_model = None
+
+
+def __getattr__(name: str):
+    """兼容旧写法 `from model.factory import chat_model`（PEP 562 模块级懒属性）。
+
+    注意：仍推荐直接使用 get_chat_model() / get_embed_model()，
+    以便在导入阶段完全不触发模型创建。
+    """
+    if name == "chat_model":
+        return get_chat_model()
+    if name == "embed_model":
+        return get_embed_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

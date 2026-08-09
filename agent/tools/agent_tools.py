@@ -1,7 +1,6 @@
 import traceback
 from datetime import datetime
 from langchain_core.tools import tool
-from rag.rag_service import RagSummarizeService
 from utils.logger_handler import logger
 from agent.services import (
     create_weather_service,
@@ -10,7 +9,15 @@ from agent.services import (
     create_external_data_service,
 )
 
-rag = RagSummarizeService()
+
+def _get_rag_summarize(query: str) -> str:
+    """懒加载知识库 Agent 并检索总结，避免导入本模块即触发 Embedding/向量库初始化。
+
+    与 diagnostic_tools.py 保持一致：重型依赖全部延迟到首次调用才创建。
+    """
+    from agent.knowledge_agent import get_knowledge_agent
+    return get_knowledge_agent().retrieve(query)
+
 
 weather_service = create_weather_service("mock")
 location_service = create_location_service("mock")
@@ -43,7 +50,7 @@ def _safe_call(tool_name: str, func, *args, **kwargs) -> str:
 
 @tool(description="从向量存储中检索参考资料")
 def rag_summarize(query: str) -> str:
-    return _safe_call("rag_summarize", rag.rag_summarize, query)
+    return _safe_call("rag_summarize", _get_rag_summarize, query)
 
 
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")

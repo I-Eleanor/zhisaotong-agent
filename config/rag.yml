@@ -1,8 +1,8 @@
-chat_model_name: kimi-k2-turbo-preview
+chat_model_name: deepseek-v4-flash
 embedding_model_name: local-embedding
 
-# Kimi 配置
-kimi_base_url: https://api.moonshot.cn/v1
+# DeepSeek 配置（OpenAI 兼容接口）
+deepseek_base_url: https://api.deepseek.com/v1
 
 # DashScope 配置（用于在线 Embedding）
 
