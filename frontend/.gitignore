@@ -1,0 +1,6 @@
+node_modules
+dist
+dist-ssr
+dist.sandbox_bak
+*.local
+.vite
