@@ -2,6 +2,11 @@
 
 venv/
 .venv/
+# 沙箱/历史残留的虚拟环境备份目录（已改名挪开，非活跃环境）
+venv_bak*/
+.venv_bak*/
+venv_contaminated*/
+venv_broken*/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -52,3 +57,24 @@ models/
 
 data/external/
 data/extermal/
+
+# 覆盖率 / 测试产物
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# 前端构建产物与依赖
+frontend/dist/
+node_modules/
+
+# 工具记忆目录
+.workbuddy/
+
+# IDE / 工具缓存
+.trae-html-share-packages/
+.ipynb_checkpoints/
+
+# 临时 / 测试残留（避免被知识库扫描索引或误提交）
+_mvtest_dst/
+data/_kb_test*

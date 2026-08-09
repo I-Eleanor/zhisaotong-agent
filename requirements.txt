@@ -1,15 +1,40 @@
-streamlit==1.50.0
+# ============================================================
+# 智扫通 - 扫地机器人智能客服系统 依赖清单（固定版本，跨环境一致）
+# 生成依据：项目实际运行环境（Python 3.12）已安装的版本
+# ============================================================
+
+# ---- Web / API 层（第二阶段新增：FastAPI + SSE 后端）----
+fastapi==0.128.0
+uvicorn==0.40.0
+sse-starlette==3.4.5
+starlette==0.50.0
+httpx==0.28.1                 # 异步 HTTP 客户端（前端 SSE 调用 + MCP 通信 + 测试）
+
+# ---- Agent / MCP 层 ----
+mcp==1.28.0                   # Model Context Protocol Server（设备状态 / 日志）
+langgraph==1.2.6              # Plan-Execute-Replan 诊断 Agent 编排
 langchain==1.3.10
 langchain-core==1.4.8
 langchain-community==0.4.2
 langchain-openai==1.3.2
-langchain-chroma==0.2.2
+langchain-chroma==1.1.0
+
+# ---- RAG / 向量库 ----
 chromadb==1.5.7
 sentence-transformers==5.4.0
+
+# 说明：前端已迁移至 React（frontend/，独立镜像），无需在后端镜像安装 Streamlit。
+
+# ---- 配置 / 工具 ----
 pydantic==2.12.5
 pydantic-settings==2.13.1
 pyyaml==6.0.3
-requests==2.32.5
-pandas==2.2.3
 python-dotenv==1.2.2
-dashscope==1.22.2
+pandas==2.2.3
+requests==2.32.5
+# dashscope==1.22.2  # 可选：仅当 config/rag.yml 选用 "dashscope-embedding" 时才需安装（当前用 local-embedding，已验证无需此包）
+
+# ---- 测试（第三阶段新增）----
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0

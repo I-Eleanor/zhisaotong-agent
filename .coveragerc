@@ -1,0 +1,19 @@
+[run]
+# 单进程模式：避免 pytest-cov 的 parallel combine/erase 触发沙箱 safe-delete
+parallel = false
+source =
+    agent
+    rag
+    api
+    utils
+    model
+omit =
+    tests/*
+    scripts/*
+    app.py
+
+[report]
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

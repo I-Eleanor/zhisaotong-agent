@@ -1,14 +1,27 @@
-# 忽略文件和目录
+# 排除不需要打进镜像的文件，减小镜像体积、避免覆盖宿主机数据
+venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
+.pytest_cache/
+.coverage
+.coverage.*
 chroma_db/
 logs/
-*.png
-*.pdf
-*.csv
+.workbuddy/
 .env
-.DS_Store
 .git/
-.gitignore
+.github/
+tests/
+docs/
+upgrade-plan/
+*.md
+!requirements.txt
+
+# 已被 React 前端取代的 Streamlit 遗留文件，不进入 API 镜像
+app.py
+app.py.deprecated
+.streamlit/
+.streamlit-deprecated/
+archive/
