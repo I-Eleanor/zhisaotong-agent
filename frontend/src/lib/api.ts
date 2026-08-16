@@ -80,7 +80,9 @@ export async function streamAgent(
             try {
               const ev = JSON.parse(dataLine) as AgentEvent;
               onEvent(ev);
-            } catch {}
+            } catch (e) {
+              console.warn("[SSE] 剩余数据解析失败:", dataLine.slice(0, 80), e);
+            }
           }
         }
         resolve();

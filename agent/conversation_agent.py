@@ -141,7 +141,7 @@ class ConversationAgent:
         msg_has_tools: set[str] = set()
 
         try:
-            for chunk, metadata in self.agent.stream(
+            for chunk, _metadata in self.agent.stream(
                 input_dict, stream_mode="messages", context={"report": False}
             ):
                 message_type = type(chunk).__name__

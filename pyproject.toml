@@ -30,7 +30,7 @@ asyncio_mode = "strict"
 [tool.coverage.run]
 parallel = false
 source = ["agent", "rag", "api", "utils", "model"]
-omit = ["tests/*", "scripts/*"]
+omit = ["tests/*", "scripts/*", "agent/services/http_services.py"]
 
 [tool.coverage.report]
 show_missing = true

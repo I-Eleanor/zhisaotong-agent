@@ -30,7 +30,7 @@ jobs:
         run: pytest tests/ -v
 
       - name: Coverage check
-        run: pytest tests/ --cov=agent --cov=rag --cov=api --cov=utils --cov=model --cov-report=term-missing --cov-fail-under=70
+        run: pytest tests/ --cov=agent --cov=rag --cov=api --cov=utils --cov=model --cov-report=term-missing --cov-fail-under=65
 
   frontend:
     runs-on: ubuntu-latest

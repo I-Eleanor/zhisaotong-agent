@@ -92,4 +92,4 @@ def test_valid_event_types():
     assert "message" in VALID_EVENT_TYPES
     assert "done" in VALID_EVENT_TYPES
     assert "route" in VALID_EVENT_TYPES
-    assert len(VALID_EVENT_TYPES) == 10
+    assert len(VALID_EVENT_TYPES) == 11
