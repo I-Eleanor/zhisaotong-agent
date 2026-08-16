@@ -1,6 +1,6 @@
 from utils.config_handler import prompts_conf
-from utils.path_tool import get_abs_path
 from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
 
 # 进程内提示词缓存：key -> 文件内容，避免同一运行期反复读磁盘
 _cache: dict[str, str] = {}
@@ -20,7 +20,8 @@ def _load_prompt(key: str, label: str) -> str:
         logger.error(f"[{label}] 在 yaml 配置项中没有 {key} 配置项")
         raise e
     try:
-        content = open(path, "r", encoding="utf-8").read()
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
     except Exception as e:
         logger.error(f"[{label}] 解析提示词出错，{str(e)}")
         raise e

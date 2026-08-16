@@ -1,38 +1,91 @@
-"""知识库管理接口：上传文件 + 重建向量库。"""
+"""知识库管理接口：上传文件 + 重建向量库 + 带来源查询。"""
 import os
-from typing import List
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from api.schemas import KnowledgeUploadResponse, KnowledgeRebuildResponse
-from utils.config_handler import chroma_conf
-from utils.path_tool import get_abs_path
+import uuid
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
+
+from api.schemas import KnowledgeRebuildResponse, KnowledgeUploadResponse
+from api.security import limiter
+from rag.rag_service import RagSummarizeService
 from rag.vector_store import VectorStoreService
+from utils.config_handler import chroma_conf
+from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
 
 router = APIRouter()
 
+ALLOWED_EXTENSIONS = tuple(chroma_conf.get("allow_knowledge_file_type", ["txt", "pdf"]))
+ALLOWED_MIME_TYPES = {"text/plain", "application/pdf"}
+MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_FILE_COUNT = 10
+MAX_FILENAME_LENGTH = 255
+MAX_TEXT_LENGTH = 5 * 1024 * 1024
+
+
+def _validate_upload_file(f: UploadFile) -> str | None:
+    if not f.filename:
+        return "文件名不能为空"
+    if len(f.filename) > MAX_FILENAME_LENGTH:
+        return f"文件名过长（最大 {MAX_FILENAME_LENGTH} 字符）"
+    ext = os.path.splitext(f.filename)[1].lstrip(".").lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return f"不支持的文件类型: .{ext}"
+    if f.content_type and f.content_type not in ALLOWED_MIME_TYPES and not f.content_type.startswith("text/"):
+        return f"不支持的 MIME 类型: {f.content_type}"
+    basename = os.path.basename(f.filename)
+    if basename != f.filename:
+        return "文件名包含非法路径字符"
+    return None
+
 
 @router.post("/knowledge/upload", response_model=KnowledgeUploadResponse)
-async def upload(files: List[UploadFile] = File(...)):
+@limiter.limit("10/minute")
+async def upload(request: Request, files: list[UploadFile] = File(...)):  # noqa: B008
     """上传文档到知识库目录（仅允许配置的文档类型）。"""
+    if len(files) > MAX_FILE_COUNT:
+        raise HTTPException(status_code=400, detail=f"最多上传 {MAX_FILE_COUNT} 个文件")
+
     data_dir = get_abs_path(chroma_conf["data_path"])
     os.makedirs(data_dir, exist_ok=True)
-    allowed = tuple(chroma_conf.get("allow_knowledge_file_type", ["txt", "pdf"]))
+
     saved = 0
+    errors = []
     for f in files:
-        if not f.filename:
+        err = _validate_upload_file(f)
+        if err:
+            errors.append(f"{f.filename or '未知'}: {err}")
             continue
-        ext = os.path.splitext(f.filename)[1].lstrip(".").lower()
-        if ext not in allowed:
-            continue
-        dest = os.path.join(data_dir, os.path.basename(f.filename))
+
         content = await f.read()
+        if len(content) == 0:
+            errors.append(f"{f.filename}: 空文件")
+            continue
+        if len(content) > MAX_FILE_SIZE:
+            errors.append(f"{f.filename}: 文件过大（最大 {MAX_FILE_SIZE // 1024 // 1024}MB）")
+            continue
+        if f.filename and f.filename.endswith(".txt") and len(content) > MAX_TEXT_LENGTH:
+            errors.append(f"{f.filename}: 文本内容过长")
+            continue
+
+        ext = os.path.splitext(f.filename)[1].lstrip(".").lower()
+        safe_name = f"{uuid.uuid4().hex[:8]}.{ext}"
+        dest = os.path.join(data_dir, safe_name)
+
         with open(dest, "wb") as out:
             out.write(content)
         saved += 1
+        logger.info({"event": "file_uploaded", "original_name": f.filename, "stored_name": safe_name, "size": len(content)})
+
+    if errors:
+        logger.warning({"event": "upload_errors", "errors": errors})
+
     return KnowledgeUploadResponse(success=True, file_count=saved)
 
 
 @router.post("/knowledge/rebuild", response_model=KnowledgeRebuildResponse)
-async def rebuild():
+@limiter.limit("5/minute")
+async def rebuild(request: Request):
     """重建向量库（基于 MD5 增量入库）。返回当前分块总数。"""
     try:
         vs = VectorStoreService()
@@ -43,4 +96,19 @@ async def rebuild():
             chunk_count = 0
         return KnowledgeRebuildResponse(success=True, chunk_count=chunk_count)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"重建失败：{e}")
+        raise HTTPException(status_code=500, detail=f"重建失败：{e}") from e
+
+
+class KnowledgeQueryRequest(BaseModel):
+    query: str
+
+
+@router.post("/knowledge/query")
+async def query_with_sources(request: KnowledgeQueryRequest):
+    """带来源的 RAG 查询，返回答案和结构化来源信息。"""
+    try:
+        rag = RagSummarizeService()
+        result = rag.rag_with_sources(request.query)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败：{e}") from e

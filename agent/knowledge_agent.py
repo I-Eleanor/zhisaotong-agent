@@ -14,7 +14,6 @@ import traceback
 from langchain_core.documents import Document
 
 from rag.rag_service import RagSummarizeService
-from utils.config_handler import agent_conf
 from utils.logger_handler import logger
 
 # 知识库文件名常量，供诊断 Agent 做定向检索

@@ -3,13 +3,11 @@
 全部使用假 Embedding（见 conftest），不加载真实 Embedding 模型。
 重排测试加载本地 CrossEncoder 权重（已在沙箱就绪），离线可用。
 """
-import shutil
-from pathlib import Path
 
 from langchain_core.documents import Document
 
-from utils.config_handler import chroma_conf
 from tests.conftest import FakeEmbeddings
+from utils.config_handler import chroma_conf
 
 
 def test_vector_retriever_returns_added_doc(temp_vector_store):
@@ -98,3 +96,87 @@ def test_chinese_file_read_with_utf8(tmp_path, monkeypatch):
     vs.load_document()
     count = vs.vector_store._collection.count()
     assert count > 0, "中文 UTF-8 文件应能被正确加载入库"
+
+
+def test_reranker_noop_returns_input():
+    from rag.reranker import NoopReranker
+
+    docs = [Document(page_content="a"), Document(page_content="b")]
+    noop = NoopReranker()
+    out = noop.rerank("query", docs)
+    assert out == docs, "NoopReranker 应原样返回输入"
+
+
+def test_create_reranker_noop():
+    from rag.reranker import NoopReranker, create_reranker
+
+    r = create_reranker(enabled=False)
+    assert isinstance(r, NoopReranker), "enabled=False 应返回 NoopReranker"
+
+
+def test_reranker_empty_input():
+    from rag.reranker import NoopReranker
+
+    noop = NoopReranker()
+    assert noop.rerank("q", []) == [], "空输入应返回空列表"
+
+
+def test_file_format_whitelist_in_vector_store(tmp_path, monkeypatch):
+    import rag.vector_store as vmod
+    from rag.vector_store import VectorStoreService
+
+    data_dir = tmp_path / "kb"
+    data_dir.mkdir()
+    (data_dir / "good.txt").write_text("有效内容", encoding="utf-8")
+    (data_dir / "bad.exe").write_text("应被忽略", encoding="utf-8")
+
+    md5_store = tmp_path / "md5.txt"
+    patched = dict(chroma_conf)
+    patched["data_path"] = str(data_dir)
+    patched["md5_hex_store"] = str(md5_store)
+    patched["chunk_size"] = 200
+    patched["chunk_overlap"] = 0
+    patched["separators"] = ["\n", "。", ""]
+    monkeypatch.setattr(vmod, "chroma_conf", patched)
+
+    vs = VectorStoreService(
+        embedding_function=FakeEmbeddings(),
+        persist_directory=str(tmp_path / "store"),
+        collection_name="whitelist_test",
+    )
+    vs.load_document()
+    assert vs.vector_store._collection.count() > 0, "白名单内文件应被加载"
+    md5_lines = md5_store.read_text(encoding="utf-8").strip().splitlines()
+    assert len(md5_lines) == 1, "只有 1 个白名单内文件，MD5 记录应为 1 行"
+
+
+def test_chromadb_temp_dir_write_and_retrieve(tmp_path, monkeypatch):
+    """集成测试：ChromaDB 在临时目录写入后可检索"""
+    import rag.vector_store as vmod
+    from rag.vector_store import VectorStoreService
+
+    data_dir = tmp_path / "kb"
+    data_dir.mkdir()
+    (data_dir / "doc.txt").write_text("扫地机器人滤网需要定期清洁。\n电池寿命约两到三年。\n", encoding="utf-8")
+
+    md5_store = tmp_path / "md5.txt"
+    patched = dict(chroma_conf)
+    patched["data_path"] = str(data_dir)
+    patched["md5_hex_store"] = str(md5_store)
+    patched["chunk_size"] = 100
+    patched["chunk_overlap"] = 0
+    patched["separators"] = ["\n", "。", ""]
+    monkeypatch.setattr(vmod, "chroma_conf", patched)
+
+    persist_dir = str(tmp_path / "store")
+    vs = VectorStoreService(
+        embedding_function=FakeEmbeddings(),
+        persist_directory=persist_dir,
+        collection_name="integration_test",
+    )
+    vs.load_document()
+    assert vs.vector_store._collection.count() > 0
+
+    retriever = vs.get_retriever(k=1)
+    docs = retriever.invoke("滤网")
+    assert docs and any("滤网" in d.page_content for d in docs), "应能检索到滤网相关内容"

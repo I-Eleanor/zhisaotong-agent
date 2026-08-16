@@ -18,6 +18,7 @@ docs/
 upgrade-plan/
 *.md
 !requirements.txt
+requirements-dev.txt
 
 # 已被 React 前端取代的 Streamlit 遗留文件，不进入 API 镜像
 app.py

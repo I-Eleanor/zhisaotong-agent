@@ -9,6 +9,7 @@ uvicorn==0.40.0
 sse-starlette==3.4.5
 starlette==0.50.0
 httpx==0.28.1                 # 异步 HTTP 客户端（前端 SSE 调用 + MCP 通信 + 测试）
+slowapi>=0.1.9                # API 限流
 
 # ---- Agent / MCP 层 ----
 mcp==1.28.0                   # Model Context Protocol Server（设备状态 / 日志）
@@ -34,7 +35,4 @@ pandas==2.2.3
 requests==2.32.5
 # dashscope==1.22.2  # 可选：仅当 config/rag.yml 选用 "dashscope-embedding" 时才需安装（当前用 local-embedding，已验证无需此包）
 
-# ---- 测试（第三阶段新增）----
-pytest==9.1.1
-pytest-asyncio==1.4.0
-pytest-cov==7.1.0
+# ---- 开发依赖见 requirements-dev.txt（测试/代码质量工具，不打入生产镜像）----

@@ -61,7 +61,7 @@ COMMANDS = {
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        print(f"用法: python scripts/dev.py <command>")
+        print("用法: python scripts/dev.py <command>")
         print(f"可用命令: {', '.join(COMMANDS)}")
         sys.exit(1)
 

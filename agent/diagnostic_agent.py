@@ -13,18 +13,19 @@
 """
 import json
 import re
-from typing import Iterator, TypedDict
+from collections.abc import Iterator
+from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
 from agent.events import AgentEvent, make_event
 from agent.tools.diagnostic_tools import (
+    current_user_id,
     query_device_status,
     query_error_code,
     query_maintenance,
     retrieve_knowledge,
-    current_user_id,
 )
 from model.factory import get_chat_model
 from utils.logger_handler import logger
@@ -318,8 +319,7 @@ class DiagnosticAgent:
         try:
             for snapshot in self.graph.stream(initial, stream_mode="values"):
                 evs = snapshot.get("events", []) or []
-                for ev in evs[seen:]:
-                    yield ev
+                yield from evs[seen:]
                 seen = len(evs)
         except Exception as e:
             logger.error({

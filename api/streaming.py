@@ -1,7 +1,7 @@
 """SSE 桥接工具：把同步事件生成器转成异步 SSE 流。
 
 原因：对话 Agent 的中间件目前只有同步版 wrap_tool_call，在异步 astream
-上下文会报 “Asynchronous implementation of awrap_tool_call is not available”。
+上下文会报 "Asynchronous implementation of awrap_tool_call is not available"。
 为复用第一阶段已验证可用的同步 execute 路径，这里用线程 + 队列把同步生成器
 桥接到 EventSourceResponse，既保持真正的流式输出，又避免改动 LangChain 中间件
 的异步协议细节。
@@ -10,12 +10,15 @@ import asyncio
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
 from sse_starlette.sse import EventSourceResponse
+
+from utils.logger_handler import logger
 
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sse-bridge")
 
 
-def sse_bridge(sync_runner):
+def sse_bridge(sync_runner, request_id: str = ""):
     """sync_runner() 返回同步生成器，产出 AgentEvent 字典。
 
     返回 EventSourceResponse，内部用线程驱动同步生成器，经 asyncio 队列
@@ -33,7 +36,8 @@ def sse_bridge(sync_runner):
                     if stop.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, ("event", event))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
+                logger.error({"event": "sse_producer_error", "request_id": request_id, "error": str(e), "stage": "stream"})
                 loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, ("stop", None))
@@ -48,7 +52,7 @@ def sse_bridge(sync_runner):
                     yield {
                         "event": "error",
                         "data": json.dumps(
-                            {"type": "error", "content": f"出错：{payload}"}, ensure_ascii=False
+                            {"type": "error", "content": "服务暂时异常，请稍后重试", "request_id": request_id}, ensure_ascii=False
                         ),
                     }
                     continue

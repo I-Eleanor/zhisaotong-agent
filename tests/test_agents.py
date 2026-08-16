@@ -6,13 +6,13 @@
 from agent.conversation_agent import ConversationAgent
 from agent.diagnostic_agent import (
     DiagnosticAgent,
-    planner_node,
     executor_node,
+    planner_node,
     replanner_node,
     reporter_node,
 )
-from agent.orchestrator import Orchestrator
 from agent.memory.conversation_buffer import ConversationBuffer
+from agent.orchestrator import Orchestrator
 
 
 # ---- 局部消息替身（仅用于 _to_events 的 class name 判定，无需真实 LangChain 消息）
@@ -146,3 +146,96 @@ def test_get_history_for_query_excludes_last_user():
     buf.add_user_message("q2")
     hist = buf.get_history_for_query()
     assert hist[-1]["role"] == "assistant", "最后一条 user 提问应被排除"
+
+
+# ----------------------------------------------------------------- Orchestrator 关键字路由 + LLM 降级
+def test_orchestrator_keyword_route_diagnostic():
+    orch = Orchestrator.__new__(Orchestrator)
+    for kw in ["不工作", "故障", "报错", "异响", "卡住", "充不进电", "error", "stuck"]:
+        assert orch.route(kw) == "diagnostic", f"关键词「{kw}」应路由到 diagnostic"
+
+
+def test_orchestrator_llm_fallback_on_failure(monkeypatch):
+    orch = Orchestrator.__new__(Orchestrator)
+
+    def boom(*a, **kw):
+        raise RuntimeError("LLM 不可用")
+
+    monkeypatch.setattr("model.factory.get_chat_model", boom)
+    result = orch.route("你好世界")
+    assert result == "conversation", "LLM 不可用时应降级到 conversation"
+
+
+def test_orchestrator_llm_classify_diagnostic(monkeypatch):
+    orch = Orchestrator.__new__(Orchestrator)
+
+    class FakeModel:
+        def invoke(self, messages, **kw):
+            class R:
+                content = "diagnostic"
+            return R()
+
+    monkeypatch.setattr("model.factory.get_chat_model", lambda: FakeModel())
+    monkeypatch.setattr("agent.orchestrator.load_orchestrator_prompt", lambda: "test")
+    result = orch.route("机器发出异响")
+    assert result == "diagnostic"
+
+
+# ----------------------------------------------------------------- Diagnostic 最大迭代保护
+def test_diagnostic_max_iterations():
+    agent = DiagnosticAgent()
+    events = list(agent.run("扫地机不工作"))
+    replan_events = [e for e in events if e["type"] == "replan"]
+    assert len(replan_events) <= 5, "迭代次数不应超过 MAX_ITERATIONS(5)"
+
+
+def test_planner_json_parse_fallback(monkeypatch):
+    from agent.diagnostic_agent import _llm_json
+
+    def bad_model(*a, **kw):
+        raise RuntimeError("LLM 故意失败")
+
+    monkeypatch.setattr("agent.diagnostic_agent.get_chat_model", bad_model)
+    result = _llm_json("sys", "user")
+    assert result is None, "LLM 失败时应返回 None，由 planner 兜底"
+
+
+def test_extract_json_with_code_fence():
+    from agent.diagnostic_agent import _extract_json
+    assert _extract_json('```json\n{"plan": ["步骤1"]}\n```') == {"plan": ["步骤1"]}
+
+
+def test_extract_json_bare():
+    from agent.diagnostic_agent import _extract_json
+    assert _extract_json('["步骤1", "步骤2"]') == ["步骤1", "步骤2"]
+
+
+def test_extract_json_empty():
+    from agent.diagnostic_agent import _extract_json
+    assert _extract_json("") is None
+    assert _extract_json("无JSON内容") is None
+
+
+# ----------------------------------------------------------------- ConversationBuffer 截断
+def test_buffer_no_compress_within_limit():
+    buf = ConversationBuffer(max_rounds=5, summary_enabled=False)
+    buf.add_user_message("q1")
+    buf.add_assistant_message("a1")
+    buf.add_user_message("q2")
+    buf.add_assistant_message("a2")
+    assert not buf.summary, "未超出 max_rounds 不应压缩"
+
+
+def test_buffer_clear():
+    buf = ConversationBuffer(max_rounds=5)
+    buf.add_user_message("q1")
+    buf.add_assistant_message("a1")
+    buf.clear()
+    assert buf.recent_messages == []
+    assert buf.summary == ""
+
+
+def test_buffer_add_empty_content_ignored():
+    buf = ConversationBuffer(max_rounds=5)
+    buf.add_message("user", "")
+    assert buf.recent_messages == [], "空内容不应写入"

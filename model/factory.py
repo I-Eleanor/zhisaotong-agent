@@ -1,17 +1,18 @@
-from abc import ABC, abstractmethod
-from typing import Optional
 import os
-from langchain_core.embeddings import Embeddings
+from abc import ABC, abstractmethod
+
 from langchain_community.chat_models.tongyi import BaseChatModel
 from langchain_community.embeddings import DashScopeEmbeddings, SentenceTransformerEmbeddings
+from langchain_core.embeddings import Embeddings
+from langchain_openai import ChatOpenAI
+
 from utils.config_handler import rag_conf
 from utils.config_validator import validate_before_use
-from langchain_openai import ChatOpenAI
 
 
 class BaseModelFactory(ABC):
     @abstractmethod
-    def generator(self) -> Optional[Embeddings | BaseChatModel]:
+    def generator(self) -> Embeddings | BaseChatModel | None:
         pass
 
 
@@ -26,6 +27,7 @@ class ChatModelFactory(BaseModelFactory):
             base_url=rag_conf["deepseek_base_url"],
             api_key=api_key,
             temperature=1,
+            request_timeout=float(rag_conf.get("llm_timeout_seconds", 60)),
         )
 
 
@@ -35,7 +37,11 @@ class EmbeddingsFactory(BaseModelFactory):
     def generator(self):
         validate_before_use("embedding")
         if rag_conf["embedding_model_name"] == "local-embedding":
-            local_path = rag_conf["embedding_local_path"]
+            # 优先环境变量（本地开发用已下载模型），需验证路径存在
+            # 路径不存在时（如 Docker 容器内）自动回退到 config 中的 HF 模型名
+            local_path = os.getenv("LOCAL_EMBEDDING_PATH")
+            if not (local_path and os.path.exists(local_path)):
+                local_path = rag_conf["embedding_local_path"]
             return SentenceTransformerEmbeddings(
                 model_name=local_path,
                 model_kwargs={'device': 'cpu'},
@@ -56,8 +62,8 @@ class EmbeddingsFactory(BaseModelFactory):
             raise ValueError(f"不支持的 embedding 模型: {rag_conf['embedding_model_name']}")
 
 
-_chat_model: Optional[BaseChatModel] = None
-_embed_model: Optional[Embeddings] = None
+_chat_model: BaseChatModel | None = None
+_embed_model: Embeddings | None = None
 
 
 def get_chat_model() -> BaseChatModel:

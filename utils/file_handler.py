@@ -1,8 +1,10 @@
-import os
 import hashlib
-from utils.logger_handler import logger
-from langchain_core.documents import Document
+import os
+
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_core.documents import Document
+
+from utils.logger_handler import logger
 
 
 def get_file_md5_hex(filepath: str):  # 获取文件的md5的十六进制字符串

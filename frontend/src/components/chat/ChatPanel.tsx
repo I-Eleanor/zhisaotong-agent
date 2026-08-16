@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageBubble } from "./MessageBubble";
-import { streamAgent } from "@/lib/api";
+import { streamAgent, syncChat } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
 
 interface UIMessage extends ChatMessage {
@@ -38,15 +38,21 @@ export function ChatPanel() {
     ]);
     setLoading(true);
 
+    let streamFailed = false;
+
     try {
       await streamAgent(
         "/api/chat",
         { query: q, history },
         (ev) => {
+          console.log("[ChatPanel onEvent]", ev.type, ev.content?.slice(0, 50));
           setMessages((prev) => {
             const arr = [...prev];
             const last = arr[arr.length - 1];
-            if (!last || last.role !== "assistant") return prev;
+            if (!last || last.role !== "assistant") {
+              console.warn("[ChatPanel] last is not assistant, skip", last);
+              return prev;
+            }
             const updated = { ...last };
             if (ev.type === "message" || ev.type === "report") {
               updated.content = (updated.content || "") + (ev.content || "");
@@ -63,21 +69,44 @@ export function ChatPanel() {
         }
       );
     } catch (e: any) {
-      setMessages((prev) => {
-        const arr = [...prev];
-        const last = arr[arr.length - 1];
-        if (last)
-          arr[arr.length - 1] = {
-            ...last,
-            content: (last.content || "") + `\n[连接失败] ${e?.message || e}`,
-            pending: false,
-          };
-        return arr;
-      });
+      streamFailed = true;
+      console.warn("[ChatPanel] 流式请求失败，尝试同步兜底", e?.message);
+
+      // 同步兜底：一次性获取完整回答
+      try {
+        const { answer } = await syncChat(q, history);
+        setMessages((prev) => {
+          const arr = [...prev];
+          const last = arr[arr.length - 1];
+          if (last) {
+            arr[arr.length - 1] = {
+              ...last,
+              content: answer,
+              pending: false,
+              status: "",
+            };
+          }
+          return arr;
+        });
+      } catch (syncErr: any) {
+        setMessages((prev) => {
+          const arr = [...prev];
+          const last = arr[arr.length - 1];
+          if (last)
+            arr[arr.length - 1] = {
+              ...last,
+              content: `[连接失败] ${e?.message || e}；同步兜底也失败：${syncErr?.message || syncErr}`,
+              pending: false,
+            };
+          return arr;
+        });
+      }
     } finally {
-      setMessages((prev) =>
-        prev.map((m, i) => (i === prev.length - 1 ? { ...m, pending: false, status: "" } : m))
-      );
+      if (!streamFailed) {
+        setMessages((prev) =>
+          prev.map((m, i) => (i === prev.length - 1 ? { ...m, pending: false, status: "" } : m))
+        );
+      }
       setLoading(false);
     }
   };

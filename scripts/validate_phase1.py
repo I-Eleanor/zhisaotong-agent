@@ -8,17 +8,15 @@
 
 用法：PYTHONPATH=<项目根> .venv/Scripts/python.exe scripts/validate_phase1.py
 """
-import os
 import sys
-import json
 
 from dotenv import load_dotenv
+
 load_dotenv(".env")
 
-from agent.orchestrator import Orchestrator, MODE_DIAGNOSTIC, MODE_CONVERSATION
-from agent.memory.conversation_buffer import ConversationBuffer
-from agent.diagnostic_agent import DiagnosticAgent
-from agent.events import AgentEvent
+from agent.diagnostic_agent import DiagnosticAgent  # noqa: E402
+from agent.memory.conversation_buffer import ConversationBuffer  # noqa: E402
+from agent.orchestrator import MODE_CONVERSATION, MODE_DIAGNOSTIC, Orchestrator  # noqa: E402
 
 results = {}
 

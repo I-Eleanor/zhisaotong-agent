@@ -1,13 +1,14 @@
 """API 请求/响应模型（Pydantic）。"""
-from typing import Optional, List
+from typing import Literal
+
 from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
     """对话请求。history 为多轮记忆，mode 可强制 routing。"""
     query: str
-    history: Optional[List[dict]] = None
-    mode: Optional[str] = None  # "conversation" | "diagnostic"
+    history: list[dict] | None = None
+    mode: Literal["conversation", "diagnostic"] | None = None
 
 
 class DiagnoseRequest(BaseModel):

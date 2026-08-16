@@ -8,9 +8,9 @@
 只有形成完整轮次的消息才会被计入压缩范围，避免把用户刚发出、
 还没得到回复的那条消息误压缩掉。
 """
+from agent.memory.summarizer import BaseSummarizer, create_summarizer
 from utils.config_handler import agent_conf
 from utils.logger_handler import logger
-from agent.memory.summarizer import BaseSummarizer, create_summarizer
 
 SUMMARY_MESSAGE_TEMPLATE = "以下是你与该用户更早之前对话的摘要，请结合它理解用户当前的问题：\n{summary}"
 

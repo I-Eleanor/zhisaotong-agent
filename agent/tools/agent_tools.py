@@ -1,13 +1,14 @@
 import traceback
 from datetime import datetime
+
 from langchain_core.tools import tool
-from utils.logger_handler import logger
+
 from agent.services import (
-    create_weather_service,
-    create_location_service,
-    create_user_id_service,
     create_external_data_service,
+    create_user_id_service,
+    create_weather_service,
 )
+from utils.logger_handler import logger
 
 
 def _get_rag_summarize(query: str) -> str:
@@ -20,7 +21,6 @@ def _get_rag_summarize(query: str) -> str:
 
 
 weather_service = create_weather_service("mock")
-location_service = create_location_service("mock")
 user_id_service = create_user_id_service("mock")
 external_data_service = create_external_data_service("csv")
 
@@ -56,11 +56,6 @@ def rag_summarize(query: str) -> str:
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")
 def get_weather(city: str) -> str:
     return _safe_call("get_weather", weather_service.get_weather, city)
-
-
-@tool(description="获取用户所在城市的名称，以纯字符串形式返回")
-def get_user_location() -> str:
-    return _safe_call("get_user_location", location_service.get_user_location)
 
 
 @tool(description="获取用户的ID，以纯字符串形式返回")

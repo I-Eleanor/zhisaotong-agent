@@ -1,29 +1,44 @@
 import os
-from pathlib import Path
-from typing import List, Tuple
+
+from utils.config_handler import agent_conf, prompts_conf, rag_conf
 from utils.path_tool import get_abs_path
-from utils.config_handler import rag_conf, prompts_conf, agent_conf
 
 
 class ConfigValidationError(Exception):
     pass
 
 
-def validate_env_vars() -> List[Tuple[str, str]]:
+def _is_hf_model_id(path: str) -> bool:
+    """判断路径是否为 HuggingFace 模型 ID（而非本地路径）。
+
+    HuggingFace 模型 ID 格式为 ``org/model-name``（如 ``sentence-transformers/xxx``），
+    既不是 Windows 绝对路径（``D:\\...``）也不是 Unix 绝对路径（``/...``）。
+    """
+    if not path:
+        return False
+    if len(path) >= 2 and path[1] == ":":       # Windows 盘符
+        return False
+    if path.startswith("/"):                     # Unix 绝对路径
+        return False
+    return "/" in path
+
+
+def validate_env_vars() -> list[tuple[str, str]]:
     errors = []
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
     if not deepseek_api_key or deepseek_api_key == "your_deepseek_api_key_here":
         errors.append(("DEEPSEEK_API_KEY", "未设置或使用示例值"))
 
     dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
-    if rag_conf.get("embedding_model_name") == "dashscope-embedding":
-        if not dashscope_api_key or dashscope_api_key == "your_dashscope_api_key_here":
-            errors.append(("DASHSCOPE_API_KEY", "未设置或使用示例值"))
+    if rag_conf.get("embedding_model_name") == "dashscope-embedding" and (
+        not dashscope_api_key or dashscope_api_key == "your_dashscope_api_key_here"
+    ):
+        errors.append(("DASHSCOPE_API_KEY", "未设置或使用示例值"))
 
     return errors
 
 
-def validate_paths() -> List[Tuple[str, str]]:
+def validate_paths() -> list[tuple[str, str]]:
     errors = []
 
     prompt_paths = [
@@ -47,14 +62,18 @@ def validate_paths() -> List[Tuple[str, str]]:
             errors.append(("external_data_path", f"文件不存在: {abs_path}"))
 
     embedding_local_path = rag_conf.get("embedding_local_path")
-    if embedding_local_path and rag_conf.get("embedding_model_name") == "local-embedding":
-        if not os.path.exists(embedding_local_path):
-            errors.append(("embedding_local_path", f"目录不存在: {embedding_local_path}"))
+    if (
+        embedding_local_path
+        and rag_conf.get("embedding_model_name") == "local-embedding"
+        and not os.path.exists(embedding_local_path)
+        and not _is_hf_model_id(embedding_local_path)
+    ):
+        errors.append(("embedding_local_path", f"目录不存在: {embedding_local_path}"))
 
     return errors
 
 
-def validate_model_config() -> List[Tuple[str, str]]:
+def validate_model_config() -> list[tuple[str, str]]:
     errors = []
 
     chat_model_name = rag_conf.get("chat_model_name")
@@ -106,8 +125,10 @@ def validate_before_use(config_type: str):
                 raise ConfigValidationError("DASHSCOPE_API_KEY 未正确配置，无法使用在线 Embedding")
         elif model_name == "local-embedding":
             local_path = rag_conf.get("embedding_local_path")
-            if not local_path or not os.path.exists(local_path):
-                raise ConfigValidationError(f"本地 Embedding 模型路径未正确配置: {local_path}")
+            if not local_path:
+                raise ConfigValidationError("本地 Embedding 模型路径未配置")
+            if not os.path.exists(local_path) and not _is_hf_model_id(local_path):
+                raise ConfigValidationError(f"本地 Embedding 模型路径不存在: {local_path}")
 
     elif config_type == "external_data":
         external_data_path = agent_conf.get("external_data_path")

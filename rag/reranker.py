@@ -1,4 +1,5 @@
 from langchain_core.documents import Document
+
 from utils.logger_handler import logger
 
 
@@ -8,7 +9,7 @@ class CrossEncoderReranker:
         self.top_k = top_k
         self._model = None
 
-    def _load_model(self):
+    def _load_model(self) -> None:
         if self._model is not None:
             return
         try:
@@ -16,7 +17,7 @@ class CrossEncoderReranker:
             self._model = CrossEncoder(self.model_name)
             logger.info({"event": "reranker_loaded", "model": self.model_name})
         except Exception as e:
-            logger.error({"event": "reranker_load_error", "model": self.model_name, "error": str(e)})
+            logger.error({"event": "reranker_load_error", "model": self.model_name, "error": str(e), "stage": "model"})
             self._model = None
 
     def rerank(self, query: str, documents: list[Document]) -> list[Document]:
@@ -33,7 +34,7 @@ class CrossEncoderReranker:
             pairs = [[query, doc.page_content] for doc in documents]
             scores = self._model.predict(pairs)
 
-            scored_docs = list(zip(scores, documents))
+            scored_docs = list(zip(scores, documents, strict=True))
             scored_docs.sort(key=lambda x: x[0], reverse=True)
 
             top_docs = [doc for _, doc in scored_docs[:self.top_k]]
@@ -48,7 +49,7 @@ class CrossEncoderReranker:
 
             return top_docs
         except Exception as e:
-            logger.error({"event": "reranker_error", "error": str(e)})
+            logger.error({"event": "reranker_error", "error": str(e), "stage": "retrieval"})
             return documents[:self.top_k]
 
 
@@ -57,7 +58,10 @@ class NoopReranker:
         return documents
 
 
-def create_reranker(enabled: bool = False, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2", top_k: int = 3):
+Reranker = CrossEncoderReranker | NoopReranker
+
+
+def create_reranker(enabled: bool = False, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2", top_k: int = 3) -> Reranker:
     if not enabled:
         logger.info({"event": "reranker_init", "mode": "noop"})
         return NoopReranker()

@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from model.factory import get_chat_model
-from agent.orchestrator import Orchestrator
-from agent.events import event_to_text
+from agent.events import event_to_text  # noqa: E402
+from agent.orchestrator import Orchestrator  # noqa: E402
+from model.factory import get_chat_model  # noqa: E402
 
 
 def test_direct_chat():

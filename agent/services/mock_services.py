@@ -2,12 +2,19 @@ import csv
 import os
 import random
 from datetime import datetime, timedelta
-from utils.logger_handler import logger
+
+from agent.services.interfaces import (
+    DeviceLogService,
+    DeviceStatusService,
+    ExternalDataService,
+    LocationService,
+    UserIdService,
+    WeatherService,
+)
 from utils.config_handler import agent_conf
-from utils.path_tool import get_abs_path
 from utils.config_validator import validate_before_use
-from agent.services.interfaces import (WeatherService, LocationService, UserIdService, ExternalDataService,
-                                       DeviceStatusService, DeviceLogService)
+from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
 
 
 class MockWeatherService(WeatherService):
@@ -54,7 +61,7 @@ class CsvExternalDataService(ExternalDataService):
         if not os.path.exists(external_data_path):
             raise FileNotFoundError(f"外部数据文件{external_data_path}不存在")
 
-        with open(external_data_path, "r", encoding="utf-8-sig") as f:
+        with open(external_data_path, encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 mapped = {}

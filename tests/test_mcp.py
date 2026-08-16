@@ -16,14 +16,13 @@ LOG_SERVER = os.path.join(PROJECT_ROOT, "mcp_server", "log_server.py")
 
 async def _probe(server_path: str, tool_name: str, arguments: dict):
     params = StdioServerParameters(command=sys.executable, args=[server_path])
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            tool_names = [t.name for t in tools.tools]
-            result = await session.call_tool(tool_name, arguments)
-            text = result.content[0].text if result.content else ""
-            return tool_names, text
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await session.list_tools()
+        tool_names = [t.name for t in tools.tools]
+        result = await session.call_tool(tool_name, arguments)
+        text = result.content[0].text if result.content else ""
+        return tool_names, text
 
 
 def test_device_mcp_server():

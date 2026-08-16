@@ -1,12 +1,14 @@
 import os
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from utils.config_handler import chroma_conf
-from model.factory import get_embed_model
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from utils.path_tool import get_abs_path
-from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
+
+from model.factory import get_embed_model
+from utils.config_handler import chroma_conf
+from utils.file_handler import get_file_md5_hex, listdir_with_allowed_type, pdf_loader, txt_loader
 from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
 
 
 class VectorStoreService:
@@ -74,7 +76,7 @@ class VectorStoreService:
                 open(get_abs_path(chroma_conf["md5_hex_store"]), "w", encoding="utf-8").close()
                 return False
 
-            with open(get_abs_path(chroma_conf["md5_hex_store"]), "r", encoding="utf-8") as f:
+            with open(get_abs_path(chroma_conf["md5_hex_store"]), encoding="utf-8") as f:
                 for line in f.readlines():
                     line = line.strip()
                     if line == md5_for_check:

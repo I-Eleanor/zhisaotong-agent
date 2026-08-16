@@ -14,8 +14,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters  # noqa: E402
+from mcp.client.stdio import stdio_client  # noqa: E402
 
 DEVICE_SERVER = os.path.join(PROJECT_ROOT, "mcp_server", "device_server.py")
 LOG_SERVER = os.path.join(PROJECT_ROOT, "mcp_server", "log_server.py")
@@ -23,14 +23,13 @@ LOG_SERVER = os.path.join(PROJECT_ROOT, "mcp_server", "log_server.py")
 
 async def probe(server_path: str, tool_name: str, arguments: dict) -> dict:
     params = StdioServerParameters(command=sys.executable, args=[server_path])
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            tool_names = [t.name for t in tools.tools]
-            result = await session.call_tool(tool_name, arguments)
-            text = result.content[0].text if result.content else ""
-            return {"tools": tool_names, "text": text}
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await session.list_tools()
+        tool_names = [t.name for t in tools.tools]
+        result = await session.call_tool(tool_name, arguments)
+        text = result.content[0].text if result.content else ""
+        return {"tools": tool_names, "text": text}
 
 
 async def main():

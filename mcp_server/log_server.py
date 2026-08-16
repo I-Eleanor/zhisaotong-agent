@@ -14,8 +14,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from mcp.server.fastmcp import FastMCP
-from agent.services import create_device_log_service, create_user_id_service
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+
+from agent.services import create_device_log_service, create_user_id_service  # noqa: E402
 
 mcp = FastMCP("device-log-server")
 

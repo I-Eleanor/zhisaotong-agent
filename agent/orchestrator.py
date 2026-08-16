@@ -9,13 +9,13 @@
 
 对外提供同步 execute()（供前端（React）/ 测试）与异步 aexecute()（供 Phase 2 SSE）。
 """
-from typing import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.events import AgentEvent
 from agent.conversation_agent import ConversationAgent
 from agent.diagnostic_agent import get_diagnostic_agent
+from agent.events import AgentEvent
 from utils.logger_handler import logger
 from utils.prompt_loader import load_orchestrator_prompt
 
@@ -25,8 +25,19 @@ DIAGNOSTIC_KEYWORDS = [
     "error", "fault", "stuck", "dead",
 ]
 
-MODE_CONVERSATION = "conversation"
-MODE_DIAGNOSTIC = "diagnostic"
+# 知识问询类模式：即使命中诊断关键词，也应优先走对话 Agent
+# 例："常见故障有哪些" → 对话 Agent（知识问答），而非诊断 Agent（执行排查）
+KNOWLEDGE_PATTERNS = [
+    "常见", "有哪些", "是什么", "什么原因", "为什么", "怎么回事",
+    "如何", "介绍", "了解", "讲解", "说明", "解释",
+    "区别", "对比", "优缺点", "推荐", "选购", "保养",
+    "清理", "清洁", "更换", "安装", "使用", "维护", "重置",
+]
+
+MODE_CONVERSATION: str = "conversation"
+MODE_DIAGNOSTIC: str = "diagnostic"
+VALID_MODES: frozenset[str] = frozenset({MODE_CONVERSATION, MODE_DIAGNOSTIC})
+RouteResult = str
 
 
 class Orchestrator:
@@ -36,9 +47,16 @@ class Orchestrator:
 
     # ----------------------------------------------------------- 意图路由
 
-    def route(self, user_query: str) -> str:
+    def route(self, user_query: str) -> RouteResult:
         """返回 MODE_CONVERSATION 或 MODE_DIAGNOSTIC。"""
         q = (user_query or "").lower()
+
+        # 先检查是否为知识问询（即使命中诊断关键词也优先对话）
+        for pat in KNOWLEDGE_PATTERNS:
+            if pat in q:
+                logger.info({"event": "route_knowledge_pattern", "pattern": pat, "mode": MODE_CONVERSATION})
+                return MODE_CONVERSATION
+
         for kw in DIAGNOSTIC_KEYWORDS:
             if kw.lower() in q:
                 logger.info({"event": "route_keyword", "keyword": kw, "mode": MODE_DIAGNOSTIC})
@@ -49,7 +67,7 @@ class Orchestrator:
         logger.info({"event": "route_llm", "mode": mode})
         return mode
 
-    def _llm_classify(self, user_query: str) -> str:
+    def _llm_classify(self, user_query: str) -> RouteResult:
         try:
             from model.factory import get_chat_model
             model = get_chat_model()

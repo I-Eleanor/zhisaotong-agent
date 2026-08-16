@@ -1,13 +1,11 @@
-"""工具类测试：file_handler 修复、config_handler、path_tool、logger。"""
+"""工具类测试：file_handler 修复、config_handler、path_tool、logger、模型工厂、prompt 加载。"""
 import os
-import tempfile
 
 from utils import file_handler, path_tool
-from utils.config_handler import rag_conf, chroma_conf, agent_conf, prompts_conf
+from utils.config_handler import agent_conf, chroma_conf, prompts_conf, rag_conf
 
 
 def test_listdir_returns_empty_for_nondir():
-    """升级计划 7.1.1：非目录路径必须返回空列表 []，而非 tuple 参数。"""
     result = file_handler.listdir_with_allowed_type("/不存在的路径/xyz", ("txt", "pdf"))
     assert result == [], f"非目录应返回 []，实际返回 {result!r}"
 
@@ -52,5 +50,38 @@ def test_path_tool_resolves_relative():
 
 def test_logger_handler_emits():
     from utils.logger_handler import logger
-    # 仅验证 logger 可用、不抛异常
     logger.info({"event": "test_log", "value": 1})
+
+
+# ----------------------------------------------------------------- 模型工厂懒加载与缓存
+def test_model_factory_lazy_and_cache():
+    import model.factory as mf
+    mf.reset_models()
+    assert mf._chat_model is None, "初始应为 None（懒加载）"
+    assert mf._embed_model is None
+
+
+def test_model_factory_reset():
+    import model.factory as mf
+    mf.reset_models()
+    assert mf._chat_model is None
+    assert mf._embed_model is None
+
+
+# ----------------------------------------------------------------- Prompt 缺失行为
+def test_prompt_missing_key_raises():
+    from utils.prompt_loader import _cache, _load_prompt
+    _cache.pop("__nonexistent_key__", None)
+    import pytest
+    with pytest.raises(KeyError):
+        _load_prompt("__nonexistent_key__", "测试")
+
+
+# ----------------------------------------------------------------- 文件格式白名单
+def test_file_whitelist_rejects_exe(tmp_path):
+    (tmp_path / "good.txt").write_text("ok", encoding="utf-8")
+    (tmp_path / "bad.exe").write_text("nope", encoding="utf-8")
+    found = file_handler.listdir_with_allowed_type(str(tmp_path), ("txt", "pdf"))
+    names = {os.path.basename(p) for p in found}
+    assert "good.txt" in names
+    assert "bad.exe" not in names

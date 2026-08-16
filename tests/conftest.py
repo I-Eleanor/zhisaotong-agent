@@ -55,10 +55,7 @@ class ScriptedChatModel:
     """
 
     def invoke(self, messages, *args, **kwargs):
-        if isinstance(messages, str):
-            text = messages
-        else:
-            text = messages[0].content if messages else ""
+        text = messages if isinstance(messages, str) else (messages[0].content if messages else "")
         s = text.lower()
 
         # 顺序很重要：replan 必须在 report 之前。
@@ -112,8 +109,9 @@ def mock_models(monkeypatch):
 # --------------------------------------------------------------------- 临时向量库
 @pytest.fixture
 def temp_vector_store(tmp_path):
-    from rag.vector_store import VectorStoreService
     from langchain_core.documents import Document
+
+    from rag.vector_store import VectorStoreService
 
     vs = VectorStoreService(
         embedding_function=FakeEmbeddings(),
@@ -132,6 +130,7 @@ def temp_vector_store(tmp_path):
 @pytest.fixture
 def api_client(monkeypatch):
     from fastapi.testclient import TestClient
+
     from api.main import app
 
     fake = CannedOrchestrator()

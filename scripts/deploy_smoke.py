@@ -11,6 +11,7 @@
     python scripts/deploy_smoke.py
 退出码 0 = 通过，1 = 失败。
 """
+import contextlib
 import json
 import os
 import shutil
@@ -128,10 +129,8 @@ def main():
                 proc.terminate()
                 proc.wait(timeout=10)
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     proc.kill()
-                except Exception:
-                    pass
     sys.exit(0 if ok else 1)
 
 

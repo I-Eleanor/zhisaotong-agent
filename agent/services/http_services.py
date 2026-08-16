@@ -1,6 +1,7 @@
 import requests
+
+from agent.services.interfaces import ExternalDataService, LocationService, UserIdService, WeatherService
 from utils.logger_handler import logger
-from agent.services.interfaces import WeatherService, LocationService, UserIdService, ExternalDataService
 
 
 class HttpWeatherService(WeatherService):

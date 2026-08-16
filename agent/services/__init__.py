@@ -1,8 +1,25 @@
-from agent.services.interfaces import (WeatherService, LocationService, UserIdService, ExternalDataService,
-                                       DeviceStatusService, DeviceLogService)
-from agent.services.mock_services import (MockWeatherService, MockLocationService, MockUserIdService,
-                                           CsvExternalDataService, CsvDeviceStatusService, MockDeviceLogService)
-from agent.services.http_services import (HttpWeatherService, HttpLocationService, HttpUserIdService, HttpExternalDataService)
+from agent.services.http_services import (
+    HttpExternalDataService,
+    HttpLocationService,
+    HttpUserIdService,
+    HttpWeatherService,
+)
+from agent.services.interfaces import (
+    DeviceLogService,
+    DeviceStatusService,
+    ExternalDataService,
+    LocationService,
+    UserIdService,
+    WeatherService,
+)
+from agent.services.mock_services import (
+    CsvDeviceStatusService,
+    CsvExternalDataService,
+    MockDeviceLogService,
+    MockLocationService,
+    MockUserIdService,
+    MockWeatherService,
+)
 from utils.logger_handler import logger
 
 
