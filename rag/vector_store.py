@@ -1,4 +1,6 @@
+import math
 import os
+import warnings
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -11,12 +13,30 @@ from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
 
+def _normalize_relevance_score(raw) -> float | None:
+    """把底层相关性分数归一化到 [0, 1]，越高越相关；无法解析时返回 None（表示未知）。
+
+    不同距离度量（cosine / l2 / ip）产生的原始分数范围不同，且可能为负或大于 1，
+    统一做钳制保证语义稳定：负分（不相关）→ 0，越界正分 → 1。
+    """
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(score) or math.isinf(score):
+        return None
+    return max(0.0, min(1.0, score))
+
+
 class VectorStoreService:
     def __init__(self, embedding_function=None, persist_directory: str = None, collection_name: str = None):
         self.vector_store = Chroma(
             collection_name=collection_name or chroma_conf["collection_name"],
             embedding_function=embedding_function or get_embed_model(),
             persist_directory=persist_directory or chroma_conf["persist_directory"],
+            # 新建集合显式声明 cosine 空间，保证 relevance score 语义为余弦相似度；
+            # 对已存在的集合（如早期 l2 集合）该参数会被忽略，不影响现有数据。
+            collection_metadata={"hnsw:space": "cosine"},
         )
 
         self.spliter = RecursiveCharacterTextSplitter(
@@ -57,6 +77,35 @@ class VectorStoreService:
             search_kwargs["filter"] = source_filter
 
         return self.vector_store.as_retriever(search_kwargs=search_kwargs)
+
+    def search_with_scores(self, query: str, k: int = None, source_files: list[str] | str | None = None) -> list[Document]:
+        """带相关性分数的检索：向量相关性分数写入 metadata['relevance_score']。
+
+        分数语义：0～1，越高越相关（分数缺失表示未知，由上层按低置信度处理）。
+        :param k: 召回数量，默认取配置中的 k
+        :param source_files: 可选，将检索范围限定在指定的知识库文件
+        """
+        search_kwargs: dict = {"k": k or chroma_conf["k"]}
+
+        source_filter = self._build_source_filter(source_files)
+        if source_filter:
+            search_kwargs["filter"] = source_filter
+
+        # 底层分数可能落在 [0,1] 之外（取决于距离度量与向量是否归一化），
+        # langchain 会发出 UserWarning；这里统一钳制到 [0,1]，故屏蔽该告警。
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Relevance scores must be between 0 and 1")
+            scored_pairs = self.vector_store.similarity_search_with_relevance_scores(query, **search_kwargs)
+
+        documents: list[Document] = []
+        for doc, raw_score in scored_pairs:
+            score = _normalize_relevance_score(raw_score)
+            if score is None:
+                doc.metadata.pop("relevance_score", None)
+            else:
+                doc.metadata["relevance_score"] = score
+            documents.append(doc)
+        return documents
 
     @staticmethod
     def _enrich_metadata(documents: list[Document], file_path: str, chunk_index_offset: int = 0) -> list[Document]:

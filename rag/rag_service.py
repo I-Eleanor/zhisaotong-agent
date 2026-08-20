@@ -20,7 +20,6 @@ def print_prompt(prompt):
 class RagSummarizeService:
     def __init__(self, vector_store: VectorStoreService = None, model=None):
         self.vector_store = vector_store or VectorStoreService()
-        self.retriever = self.vector_store.get_retriever()
         # 优先环境变量（本地开发用已下载模型），需验证路径存在
         # 路径不存在时（如 Docker 容器内）自动回退到 config 中的 HF 模型名
         _env_reranker = os.getenv("LOCAL_RERANKER_PATH")
@@ -40,12 +39,52 @@ class RagSummarizeService:
         chain = self.prompt_template | print_prompt | self.model | StrOutputParser()
         return chain
 
-    def retriever_docs(self, query: str, source_files: list[str] | str = None) -> list[Document]:
-        """检索文档；传入 source_files 时把检索范围限定在指定知识库文件内。"""
-        if source_files:
-            retriever = self.vector_store.get_retriever(source_files=source_files)
-            return retriever.invoke(query)
-        return self.retriever.invoke(query)
+    def retriever_docs(self, query: str, source_files: list[str] | str | None = None) -> list[Document]:
+        """带分数检索文档（relevance_score 写入 metadata）；传入 source_files 时限定检索范围。"""
+        return self.vector_store.search_with_scores(query, source_files=source_files)
+
+    # ------------------------------------------------- 统一检索链路
+
+    def _retrieve_and_rerank(self, query: str, source_files: list[str] | str | None = None) -> list[Document]:
+        """唯一检索链路：向量召回（带 relevance_score）→ CrossEncoder 重排（带 rerank_score）。
+
+        build_context / rag_summarize / rag_with_sources 共用本方法，
+        保证分数语义与置信度判断行为一致。
+        """
+        docs = self.retriever_docs(query, source_files=source_files)
+        if not docs:
+            logger.warning({"event": "rag_no_results", "query": query, "source_files": source_files})
+            return []
+        return self.reranker.rerank(query, docs)
+
+    def _top_confidence(self, docs: list[Document]) -> float:
+        """取首条文档的置信度：优先 rerank_score（重排信号更准），否则 relevance_score。
+
+        分数缺失按 0 处理（低置信度），绝不默认高置信度。
+        """
+        if not docs:
+            return 0.0
+        top = docs[0].metadata
+        if top.get("rerank_score") is not None:
+            return float(top["rerank_score"])
+        return float(top.get("relevance_score", 0.0))
+
+    def _format_context(self, docs: list[Document]) -> str:
+        """把重排后的文档拼装为带引用来源的上下文文本。"""
+        context = ""
+        for counter, doc in enumerate(docs, start=1):
+            citation = self._format_citation(doc.metadata)
+            context += f"【参考资料{counter}】来源：{citation}\n内容：{doc.page_content}\n\n"
+        return context
+
+    def _invoke_chain(self, query: str, context: str) -> str:
+        """统一的 LLM 总结入口。"""
+        return self.chain.invoke(
+            {
+                "input": query,
+                "context": context,
+            }
+        )
 
     @staticmethod
     def _format_citation(metadata: dict) -> str:
@@ -63,37 +102,25 @@ class RagSummarizeService:
     LOW_CONFIDENCE_PREFIX = "⚠️ 知识库依据不足："
 
     def _extract_sources(self, docs: list[Document]) -> list[dict]:
-        """从检索结果中提取结构化来源信息。"""
+        """从检索结果中提取结构化来源信息（score 为向量相关性，rerank_score 为重排分数）。"""
         sources = []
         for doc in docs:
             sources.append({
                 "document": doc.metadata.get("source_file", "未知来源"),
                 "chunk_id": doc.metadata.get("chunk_index", -1),
                 "score": round(doc.metadata.get("relevance_score", 0.0), 4),
+                "rerank_score": round(doc.metadata["rerank_score"], 4) if doc.metadata.get("rerank_score") is not None else None,
             })
         return sources
 
-    def _check_confidence(self, docs: list[Document]) -> bool:
-        """检查检索结果的置信度是否达到阈值。"""
-        if not docs:
-            return False
-        top_score = docs[0].metadata.get("relevance_score", 1.0)
-        return top_score >= self.confidence_threshold
-
-    def build_context(self, query: str, source_files: list[str] | str = None) -> str:
+    def build_context(self, query: str, source_files: list[str] | str | None = None) -> str:
         """执行「向量召回 → 重排 → 拼装带引用的上下文」，返回空字符串表示未检索到资料。"""
-        context_docs = self.retriever_docs(query, source_files=source_files)
+        context_docs = self._retrieve_and_rerank(query, source_files=source_files)
 
         if not context_docs:
-            logger.warning({"event": "rag_no_results", "query": query, "source_files": source_files})
             return ""
 
-        context_docs = self.reranker.rerank(query, context_docs)
-
-        context = ""
-        for counter, doc in enumerate(context_docs, start=1):
-            citation = self._format_citation(doc.metadata)
-            context += f"【参考资料{counter}】来源：{citation}\n内容：{doc.page_content}\n\n"
+        context = self._format_context(context_docs)
 
         logger.info({
             "event": "rag_build_context",
@@ -105,60 +132,58 @@ class RagSummarizeService:
 
         return context
 
-    def rag_summarize(self, query: str, source_files: list[str] | str = None) -> str:
-        context = self.build_context(query, source_files=source_files)
-
-        if not context:
-            return self.NO_RESULT_MESSAGE
-
-        logger.info({"event": "rag_summarize", "query": query, "source_files": source_files})
-
-        return self.chain.invoke(
-            {
-                "input": query,
-                "context": context,
-            }
-        )
-
-    def rag_with_sources(self, query: str, source_files: list[str] | str = None) -> dict:
-        """RAG 问答并返回结构化来源信息。"""
-        context_docs = self.retriever_docs(query, source_files=source_files)
+    def rag_summarize(self, query: str, source_files: list[str] | str | None = None) -> str:
+        context_docs = self._retrieve_and_rerank(query, source_files=source_files)
 
         if not context_docs:
-            logger.warning({"event": "rag_no_results", "query": query, "source_files": source_files})
+            return self.NO_RESULT_MESSAGE
+
+        context = self._format_context(context_docs)
+        confidence = self._top_confidence(context_docs)
+
+        logger.info({
+            "event": "rag_summarize",
+            "query": query,
+            "source_files": source_files,
+            "confidence": confidence,
+        })
+
+        answer = self._invoke_chain(query, context)
+        if confidence < self.confidence_threshold:
+            answer = f"{self.LOW_CONFIDENCE_PREFIX}以下回答可能不够准确，建议进一步确认。\n\n{answer}"
+        return answer
+
+    def rag_with_sources(self, query: str, source_files: list[str] | str | None = None) -> dict:
+        """RAG 问答并返回结构化来源信息。"""
+        context_docs = self._retrieve_and_rerank(query, source_files=source_files)
+
+        if not context_docs:
             return {
                 "answer": self.NO_RESULT_MESSAGE,
                 "sources": [],
                 "confidence": 0.0,
             }
 
-        context_docs = self.reranker.rerank(query, context_docs)
+        context = self._format_context(context_docs)
         sources = self._extract_sources(context_docs)
-        top_score = sources[0]["score"] if sources else 0.0
-
-        context = ""
-        for counter, doc in enumerate(context_docs, start=1):
-            citation = self._format_citation(doc.metadata)
-            context += f"【参考资料{counter}】来源：{citation}\n内容：{doc.page_content}\n\n"
+        confidence = self._top_confidence(context_docs)
 
         logger.info({
             "event": "rag_with_sources",
             "query": query,
             "doc_count": len(context_docs),
             "sources": [s["document"] for s in sources],
-            "top_score": top_score,
+            "confidence": confidence,
         })
 
-        if top_score < self.confidence_threshold:
-            answer = self.chain.invoke({"input": query, "context": context})
+        answer = self._invoke_chain(query, context)
+        if confidence < self.confidence_threshold:
             answer = f"{self.LOW_CONFIDENCE_PREFIX}以下回答可能不够准确，建议进一步确认。\n\n{answer}"
-        else:
-            answer = self.chain.invoke({"input": query, "context": context})
 
         return {
             "answer": answer,
             "sources": sources,
-            "confidence": top_score,
+            "confidence": confidence,
         }
 
 
