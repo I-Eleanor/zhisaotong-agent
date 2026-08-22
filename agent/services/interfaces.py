@@ -21,8 +21,8 @@ class UserIdService(ABC):
 
 class ExternalDataService(ABC):
     @abstractmethod
-    def fetch_data(self, user_id: str, month: str) -> str:
-        pass
+    def fetch_data(self, user_id: str, month: str) -> dict[str, str]:
+        """查询指定用户指定月份的使用记录；未检索到时返回空 dict。"""
 
 
 class DeviceStatusService(ABC):

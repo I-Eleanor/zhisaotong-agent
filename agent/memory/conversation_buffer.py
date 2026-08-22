@@ -16,7 +16,7 @@ SUMMARY_MESSAGE_TEMPLATE = "以下是你与该用户更早之前对话的摘要�
 
 
 class ConversationBuffer:
-    def __init__(self, max_rounds: int = None, summarizer: BaseSummarizer = None, summary_enabled: bool = None):
+    def __init__(self, max_rounds: int | None = None, summarizer: BaseSummarizer | None = None, summary_enabled: bool | None = None):
         memory_conf = (agent_conf or {}).get("memory", {}) or {}
 
         self.max_rounds = max_rounds if max_rounds is not None else memory_conf.get("max_rounds", 5)

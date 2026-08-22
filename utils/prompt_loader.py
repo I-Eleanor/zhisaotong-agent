@@ -1,5 +1,5 @@
 from utils.config_handler import prompts_conf
-from utils.logger_handler import logger
+from utils.logger_handler import logger, safe_exception_fields
 from utils.path_tool import get_abs_path
 
 # 进程内提示词缓存：key -> 文件内容，避免同一运行期反复读磁盘
@@ -17,13 +17,18 @@ def _load_prompt(key: str, label: str) -> str:
     try:
         path = get_abs_path(prompts_conf[key])
     except KeyError as e:
-        logger.error(f"[{label}] 在 yaml 配置项中没有 {key} 配置项")
+        logger.error({"event": "prompt_config_missing", "key": key, "label": label})
         raise e
     try:
         with open(path, encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
-        logger.error(f"[{label}] 解析提示词出错，{str(e)}")
+        logger.error({
+            "event": "prompt_load_error",
+            "key": key,
+            "label": label,
+            **safe_exception_fields(e),
+        })
         raise e
     _cache[key] = content
     return content

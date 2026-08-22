@@ -13,13 +13,14 @@ from agent.services.interfaces import (
 )
 from utils.config_handler import agent_conf
 from utils.config_validator import validate_before_use
-from utils.logger_handler import logger
+from utils.exceptions import ServiceUnavailableError
+from utils.logger_handler import log_safe_text, log_safe_value, logger
 from utils.path_tool import get_abs_path
 
 
 class MockWeatherService(WeatherService):
     def get_weather(self, city: str) -> str:
-        logger.info({"event": "mock_weather", "city": city})
+        logger.info({"event": "mock_weather", "city": log_safe_text(city)})
         return f"城市{city}天气为晴天，气温26摄氏度，空气湿度50%，南风1级，AQI21，最近6小时降雨概率极低"
 
 
@@ -49,7 +50,7 @@ class CsvExternalDataService(ExternalDataService):
     }
 
     def __init__(self):
-        self._data: dict = {}
+        self._data: dict[str, dict[str, dict[str, str]]] = {}
 
     def _load_data(self):
         if self._data:
@@ -72,7 +73,11 @@ class CsvExternalDataService(ExternalDataService):
                 time_val = mapped.get("time", "")
 
                 if not user_id or not time_val:
-                    logger.warning({"event": "csv_skip_row", "reason": "缺失字段", "row": row})
+                    logger.warning({
+                        "event": "csv_skip_row",
+                        "reason": "缺失字段",
+                        "row": log_safe_value(row),
+                    })
                     continue
 
                 if user_id not in self._data:
@@ -87,14 +92,18 @@ class CsvExternalDataService(ExternalDataService):
 
         logger.info({"event": "csv_loaded", "user_count": len(self._data)})
 
-    def fetch_data(self, user_id: str, month: str) -> str:
+    def fetch_data(self, user_id: str, month: str) -> dict[str, str]:
         self._load_data()
 
         try:
             return self._data[user_id][month]
         except KeyError:
-            logger.warning({"event": "external_data_not_found", "user_id": user_id, "month": month})
-            return ""
+            logger.warning({
+                "event": "external_data_not_found",
+                "user_id": log_safe_text(user_id),
+                "month": log_safe_text(month),
+            })
+            return {}
 
     def available_months(self, user_id: str) -> list[str]:
         """返回该用户已有数据的月份列表（升序）。"""
@@ -109,25 +118,31 @@ class CsvExternalDataService(ExternalDataService):
 class CsvDeviceStatusService(DeviceStatusService):
     """基于 CSV 数据的设备状态服务，复用 CsvExternalDataService 的数据加载与缓存。"""
 
-    def __init__(self, external_data_service: CsvExternalDataService = None):
+    def __init__(self, external_data_service: CsvExternalDataService | None = None):
         self._external = external_data_service or CsvExternalDataService()
 
     def get_status(self, user_id: str, month: str = "") -> str:
+        """查询设备状态；数据不可用时抛 ServiceUnavailableError（不再返回错误字符串，
+        避免上层把"未查询到数据"误当成成功的查询结果）。"""
         if not user_id:
-            return "未提供用户ID，无法查询设备状态"
+            raise ServiceUnavailableError("未提供用户ID，无法查询设备状态")
 
         target_month = month or self._external.latest_month(user_id)
 
         if not target_month:
-            logger.warning({"event": "device_status_not_found", "user_id": user_id})
-            return f"未查询到用户{user_id}的设备运行数据"
+            logger.warning({"event": "device_status_not_found", "user_id": log_safe_text(user_id)})
+            raise ServiceUnavailableError(f"未查询到用户{user_id}的设备运行数据")
 
         record = self._external.fetch_data(user_id, target_month)
 
         if not record:
-            return f"未查询到用户{user_id}在{target_month}的设备运行数据"
+            raise ServiceUnavailableError(f"未查询到用户{user_id}在{target_month}的设备运行数据")
 
-        logger.info({"event": "device_status_success", "user_id": user_id, "month": target_month})
+        logger.info({
+            "event": "device_status_success",
+            "user_id": log_safe_text(user_id),
+            "month": log_safe_text(target_month),
+        })
 
         lines = [f"用户ID：{user_id}", f"数据月份：{target_month}"]
         for key, value in record.items():
@@ -157,7 +172,7 @@ class MockDeviceLogService(DeviceLogService):
     OBSTACLES = ["电线", "地毯流苏", "袜子", "宠物玩具"]
     PARTS = ["主刷", "边刷", "HEPA滤网", "拖布"]
 
-    def __init__(self, external_data_service: CsvExternalDataService = None, seed: int = 20260806):
+    def __init__(self, external_data_service: CsvExternalDataService | None = None, seed: int = 20260806):
         self._external = external_data_service or CsvExternalDataService()
         self._seed = seed
 
@@ -197,7 +212,12 @@ class MockDeviceLogService(DeviceLogService):
 
         lines.sort()
 
-        logger.info({"event": "device_logs_success", "user_id": user_id, "days": days, "log_count": len(lines)})
+        logger.info({
+            "event": "device_logs_success",
+            "user_id": log_safe_text(user_id),
+            "days": days,
+            "log_count": len(lines),
+        })
 
         header = f"设备 device-{user_id} 最近{days}天运行日志（共{len(lines)}条）："
         return header + "\n" + "\n".join(lines)

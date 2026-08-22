@@ -6,35 +6,37 @@
 2. 结构化事件流——对外输出统一的 AgentEvent，供前端（React）/ SSE 分类渲染；
 3. 依赖注入——model / tools / middleware 均可从外部传入，便于测试替换为 Mock。
 """
+import os
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import InputAgentState
+from langchain_core.messages import AnyMessage
 
 from agent.events import AgentEvent, make_event
-from agent.tools.agent_tools import (
-    fetch_external_data,
-    fill_context_for_report,
-    get_current_month,
-    get_user_id,
-    get_weather,
-    rag_summarize,
-)
+from agent.tools.agent_tools import build_conversation_tools
 from agent.tools.middleware import log_before_model, monitor_tool, report_prompt_switch
 from model.factory import get_chat_model
-from utils.logger_handler import logger
+from utils import error_codes
+from utils.logger_handler import log_safe_text, logger, safe_exception_fields
 from utils.prompt_loader import load_system_prompts
+from utils.request_context import get_request_id
 
 AGENT_NAME = "conversation"
 
-DEFAULT_TOOLS = [rag_summarize, get_weather, get_user_id,
-                 get_current_month, fetch_external_data, fill_context_for_report]
+# 逐字流式输出的分块间隔（秒）：纯视觉效果。设为 0 关闭（不占用工作线程等待），
+# 生产高并发场景建议关闭，由前端动画模拟逐字显示。
+STREAM_CHUNK_DELAY_SECONDS = float(os.getenv("STREAM_CHUNK_DELAY_SECONDS", "0.02"))
+
+DEFAULT_TOOLS = build_conversation_tools()
 
 DEFAULT_MIDDLEWARE = [monitor_tool, log_before_model, report_prompt_switch]
 
 
 class ConversationAgent:
-    def __init__(self, model=None, tools: list = None, middleware: list = None, system_prompt: str = None):
+    def __init__(self, model=None, tools: list | None = None, middleware: list | None = None, system_prompt: str | None = None):
         self.agent = create_agent(
             model=model or get_chat_model(),
             system_prompt=system_prompt or load_system_prompts(),
@@ -45,13 +47,13 @@ class ConversationAgent:
     # --------------------------------------------------------------- 输入构造
 
     @staticmethod
-    def _build_input(query: str, history: list[dict] = None) -> dict:
+    def _build_input(query: str, history: list[dict] | None = None) -> InputAgentState:
         """把历史消息与本轮提问拼装为 Agent 输入。
 
         history 形如 [{"role": "system"|"user"|"assistant", "content": "..."}]，
         通常由 ConversationBuffer.get_history_for_query() 提供。
         """
-        messages: list[dict] = []
+        messages: list[AnyMessage | dict[str, Any]] = []
 
         for message in history or []:
             role = message.get("role")
@@ -68,7 +70,7 @@ class ConversationAgent:
     def _message_key(message) -> str:
         return getattr(message, "id", None) or f"{type(message).__name__}:{id(message)}"
 
-    def _to_events(self, message, skip: set = None) -> list[AgentEvent]:
+    def _to_events(self, message, skip: set | None = None) -> list[AgentEvent]:
         """把 LangGraph 输出的单条消息翻译为对外事件。
 
         skip: 历史助手消息内容集合，用于跳过把历史回显成新事件（避免前端重复）。
@@ -120,7 +122,7 @@ class ConversationAgent:
 
     # --------------------------------------------------------------- 执行入口
 
-    def stream(self, query: str, history: list[dict] = None) -> Iterator[AgentEvent]:
+    def stream(self, query: str, history: list[dict] | None = None) -> Iterator[AgentEvent]:
         """流式执行，只输出最终回答（推理内容不输出）。
 
         使用 stream_mode="messages" 获取逐 token 输出。
@@ -131,7 +133,7 @@ class ConversationAgent:
 
         logger.info({
             "event": "conversation_agent_start",
-            "query": query,
+            "query": log_safe_text(query),
             "history_messages": len(input_dict["messages"]) - 1,
         })
 
@@ -189,61 +191,36 @@ class ConversationAgent:
         except Exception as e:
             logger.error({
                 "event": "conversation_agent_error",
-                "query": query,
-                "error_type": type(e).__name__,
-                "error_msg": str(e),
+                "query": log_safe_text(query),
+                "request_id": get_request_id(),
+                "stage": "model",
+                **safe_exception_fields(e),
             })
-            yield make_event("error", agent=AGENT_NAME, content=f"对话处理失败：{str(e)}")
+            # 客户端只收到安全提示与结构化错误字段，原始异常仅进日志
+            yield make_event(
+                "error",
+                agent=AGENT_NAME,
+                content="对话处理失败，请稍后重试。",
+                error_code=error_codes.MODEL_UNAVAILABLE,
+                request_id=get_request_id(),
+            )
 
-        # 流结束后，输出未丢弃的缓冲内容（最终回答），分块 + 延迟模拟逐字流式
+        # 流结束后，输出未丢弃的缓冲内容（最终回答），分块 + 可配置延迟模拟逐字流式
         for mid, buf in msg_buffers.items():
             if mid not in msg_has_tools and buf:
                 for i in range(0, len(buf), 2):
                     yield make_event("message", agent=AGENT_NAME, content=buf[i:i + 2])
-                    time.sleep(0.02)
+                    if STREAM_CHUNK_DELAY_SECONDS > 0:
+                        time.sleep(STREAM_CHUNK_DELAY_SECONDS)
 
         yield make_event("done", agent=AGENT_NAME)
 
-    async def astream(self, query: str, history: list[dict] = None) -> AsyncIterator[AgentEvent]:
-        """异步流式执行，供 FastAPI SSE 使用。"""
-        input_dict = self._build_input(query, history)
-        # 历史助手消息内容集合，用于跳过历史回显
-        skip = {m.get("content", "").strip() for m in (history or []) if m.get("role") == "assistant"}
-
-        logger.info({
-            "event": "conversation_agent_astart",
-            "query": query,
-            "history_messages": len(input_dict["messages"]) - 1,
-        })
-
-        seen: set[str] = set()
-
-        try:
-            async for chunk in self.agent.astream(input_dict, stream_mode="values", context={"report": False}):
-                for message in chunk.get("messages", []):
-                    key = self._message_key(message)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    for event in self._to_events(message, skip):
-                        yield event
-        except Exception as e:
-            logger.error({
-                "event": "conversation_agent_error",
-                "query": query,
-                "error_type": type(e).__name__,
-                "error_msg": str(e),
-            })
-            yield make_event("error", agent=AGENT_NAME, content=f"对话处理失败：{str(e)}")
-
-        yield make_event("done", agent=AGENT_NAME)
-
-    def execute_stream(self, query: str, history: list[dict] = None) -> Iterator[str]:
+    def execute_stream(self, query: str, history: list[dict] | None = None) -> Iterator[str]:
         """兼容旧调用方式的纯文本流式接口。"""
         from agent.events import events_to_text
         yield from events_to_text(self.stream(query, history))
 
-    def invoke(self, query: str, history: list[dict] = None) -> str:
+    def invoke(self, query: str, history: list[dict] | None = None) -> str:
         """一次性返回完整回答（累积所有 message 事件）。"""
         answer = ""
         for event in self.stream(query, history):
