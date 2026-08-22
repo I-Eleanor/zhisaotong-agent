@@ -20,6 +20,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Prepare deterministic test configuration
+        shell: bash
+        run: |
+          mkdir -p data/extermal
+          cp data/sample/records_sample.csv data/extermal/records.csv
+          echo "DEEPSEEK_API_KEY=ci-test-key" >> "$GITHUB_ENV"
+
       - name: Ruff check
         run: ruff check .
 

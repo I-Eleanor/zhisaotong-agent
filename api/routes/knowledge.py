@@ -34,7 +34,9 @@ def _validate_upload_file(f: UploadFile) -> str | None:
     if f.content_type and f.content_type not in ALLOWED_MIME_TYPES and not f.content_type.startswith("text/"):
         return f"不支持的 MIME 类型: {f.content_type}"
     basename = os.path.basename(f.filename)
-    if basename != f.filename:
+    # Reject both separators explicitly so validation is consistent across
+    # Windows and POSIX runners; os.path.basename only handles the host OS.
+    if basename != f.filename or "/" in f.filename or "\\" in f.filename:
         return "文件名包含非法路径字符"
     return None
 
