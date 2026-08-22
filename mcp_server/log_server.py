@@ -17,8 +17,11 @@ if PROJECT_ROOT not in sys.path:
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from agent.services import create_device_log_service, create_user_id_service  # noqa: E402
+from utils.logger_handler import logger, safe_exception_fields  # noqa: E402
 
 mcp = FastMCP("device-log-server")
+
+_LOGS_UNAVAILABLE_MESSAGE = "设备日志数据暂时不可用，请稍后重试。"
 
 
 @mcp.tool()
@@ -26,10 +29,20 @@ def query_device_logs(user_id: str, days: int = 7) -> str:
     """查询指定用户设备最近 days 天的运行日志（含错误码、告警、运行时长等）。
 
     入参 user_id 为数字字符串；days 为整数，默认 7。
+    任何失败（服务构造、数据缺失、底层异常）都只返回固定安全文本：
+    异常原文可能含路径 / 密钥等内部信息，只进脱敏日志。
     """
-    uid = user_id or create_user_id_service("mock").get_user_id()
-    svc = create_device_log_service("mock")
-    return svc.get_logs(uid, days)
+    try:
+        uid = user_id or create_user_id_service("mock").get_user_id()
+        svc = create_device_log_service("mock")
+        return svc.get_logs(uid, days)
+    except Exception as e:
+        logger.error({
+            "event": "mcp_device_logs_error",
+            "error_type": type(e).__name__,
+            **safe_exception_fields(e),
+        })
+        return _LOGS_UNAVAILABLE_MESSAGE
 
 
 def main() -> None:

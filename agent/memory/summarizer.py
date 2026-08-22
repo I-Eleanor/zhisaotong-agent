@@ -10,7 +10,7 @@
 """
 from abc import ABC, abstractmethod
 
-from utils.logger_handler import logger
+from utils.logger_handler import logger, safe_exception_fields
 
 SUMMARY_PROMPT = """你是对话摘要助手。请把下面这段「扫地机器人客服」的历史对话压缩为简洁摘要。
 
@@ -103,8 +103,7 @@ class ConversationSummarizer(BaseSummarizer):
         except Exception as e:
             logger.error({
                 "event": "memory_summarize_error",
-                "error_type": type(e).__name__,
-                "error_msg": str(e),
+                **safe_exception_fields(e),
             })
             return self._fallback(conversation, previous_summary)
 

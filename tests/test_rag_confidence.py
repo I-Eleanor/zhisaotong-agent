@@ -160,12 +160,15 @@ def test_missing_score_treated_as_low_confidence():
     assert svc._top_confidence([doc_without_score]) == 0.0, "分数缺失必须按低置信度处理"
 
 
-def test_top_confidence_prefers_rerank_score():
+def test_top_confidence_ignores_rerank_score():
+    """置信度只看 relevance_score：rerank_score 仅用于排序与展示，即使存在也不采用。"""
     svc = RagSummarizeService.__new__(RagSummarizeService)
     only_vector = Document(page_content="x", metadata={"relevance_score": 0.2})
     both_scores = Document(page_content="x", metadata={"relevance_score": 0.2, "rerank_score": 0.9})
     assert svc._top_confidence([only_vector]) == pytest.approx(0.2)
-    assert svc._top_confidence([both_scores]) == pytest.approx(0.9)
+    assert svc._top_confidence([both_scores]) == pytest.approx(0.2), (
+        "rerank_score 不得参与置信度判断（两类分数来源、分布、校准方式不同）"
+    )
 
 
 # ------------------------------------------------------------- 重排分数分离

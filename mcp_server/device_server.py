@@ -17,8 +17,12 @@ if PROJECT_ROOT not in sys.path:
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from agent.services import create_device_status_service, create_user_id_service  # noqa: E402
+from utils.exceptions import ServiceUnavailableError  # noqa: E402
+from utils.logger_handler import log_safe_text, logger, safe_exception_fields  # noqa: E402
 
 mcp = FastMCP("device-status-server")
+
+_STATUS_UNAVAILABLE_MESSAGE = "设备状态数据暂时不可用，请稍后重试。"
 
 
 @mcp.tool()
@@ -26,10 +30,29 @@ def query_device_status(user_id: str) -> str:
     """查询指定用户设备的运行状态（覆盖率、清洁效率、耗材状态）。
 
     入参 user_id 为数字字符串（如 '123'）；为空时使用默认 mock 用户。
+    任何失败（服务构造、数据缺失、底层异常）都只返回固定安全文本：
+    异常原文可能含用户 ID / 路径 / 密钥等内部信息，只进脱敏日志。
     """
-    uid = user_id or create_user_id_service("mock").get_user_id()
-    svc = create_device_status_service("csv")
-    return svc.get_status(uid)
+    try:
+        uid = user_id or create_user_id_service("mock").get_user_id()
+        svc = create_device_status_service("csv")
+        return svc.get_status(uid)
+    except ServiceUnavailableError as e:
+        logger.warning({
+            "event": "mcp_device_status_unavailable",
+            "user_id": log_safe_text(uid) if user_id else "",
+            "error_type": type(e).__name__,
+            "error_code": e.error_code,
+            "error_msg": log_safe_text(str(e)),
+        })
+        return _STATUS_UNAVAILABLE_MESSAGE
+    except Exception as e:
+        logger.error({
+            "event": "mcp_device_status_error",
+            "error_type": type(e).__name__,
+            **safe_exception_fields(e),
+        })
+        return _STATUS_UNAVAILABLE_MESSAGE
 
 
 @mcp.tool()

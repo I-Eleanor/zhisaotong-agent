@@ -2,15 +2,15 @@
 import os
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from api.container import AppContainer, get_app_container
 from api.schemas import KnowledgeRebuildResponse, KnowledgeUploadResponse
 from api.security import limiter
-from rag.rag_service import RagSummarizeService
-from rag.vector_store import VectorStoreService
 from utils.config_handler import chroma_conf
-from utils.logger_handler import logger
+from utils.exceptions import AgentProjectError
+from utils.logger_handler import log_safe_text, log_safe_value, logger
 from utils.path_tool import get_abs_path
 
 router = APIRouter()
@@ -68,35 +68,47 @@ async def upload(request: Request, files: list[UploadFile] = File(...)):  # noqa
             errors.append(f"{f.filename}: 文本内容过长")
             continue
 
-        ext = os.path.splitext(f.filename)[1].lstrip(".").lower()
+        filename = f.filename or ""
+        ext = os.path.splitext(filename)[1].lstrip(".").lower() if filename else ""
         safe_name = f"{uuid.uuid4().hex[:8]}.{ext}"
         dest = os.path.join(data_dir, safe_name)
 
         with open(dest, "wb") as out:
             out.write(content)
         saved += 1
-        logger.info({"event": "file_uploaded", "original_name": f.filename, "stored_name": safe_name, "size": len(content)})
+        logger.info({
+            "event": "file_uploaded",
+            "original_name": log_safe_text(f.filename),
+            "stored_name": safe_name,
+            "size": len(content),
+        })
 
     if errors:
-        logger.warning({"event": "upload_errors", "errors": errors})
+        logger.warning({"event": "upload_errors", "errors": log_safe_value(errors)})
 
     return KnowledgeUploadResponse(success=True, file_count=saved)
 
 
 @router.post("/knowledge/rebuild", response_model=KnowledgeRebuildResponse)
 @limiter.limit("5/minute")
-async def rebuild(request: Request):
-    """重建向量库（基于 MD5 增量入库）。返回当前分块总数。"""
+async def rebuild(request: Request, container: AppContainer = Depends(get_app_container)):  # noqa: B008
+    """重建向量库（基于 MD5 增量入库）。返回当前分块总数。
+
+    业务异常交给全局 handler 统一转换；未知异常（Chroma / 文件系统等）
+    包装成 AgentProjectError 后抛出，响应不携带任何原始异常文本。
+    """
     try:
-        vs = VectorStoreService()
+        vs = container.vector_store
         vs.load_document()
         try:
-            chunk_count = vs.vector_store._collection.count()
+            chunk_count = vs.count()
         except Exception:
             chunk_count = 0
         return KnowledgeRebuildResponse(success=True, chunk_count=chunk_count)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"重建失败：{e}") from e
+    except AgentProjectError:
+        raise
+    except Exception as e:
+        raise AgentProjectError("知识库重建失败", stage="knowledge_rebuild", original=e) from e
 
 
 class KnowledgeQueryRequest(BaseModel):
@@ -104,11 +116,19 @@ class KnowledgeQueryRequest(BaseModel):
 
 
 @router.post("/knowledge/query")
-async def query_with_sources(request: KnowledgeQueryRequest):
-    """带来源的 RAG 查询，返回答案和结构化来源信息。"""
+async def query_with_sources(
+    request: KnowledgeQueryRequest,
+    container: AppContainer = Depends(get_app_container),  # noqa: B008
+):
+    """带来源的 RAG 查询，返回答案和结构化来源信息。
+
+    业务异常交给全局 handler 统一转换；未知异常包装成 AgentProjectError 后抛出。
+    """
     try:
-        rag = RagSummarizeService()
+        rag = container.rag_service
         result = rag.rag_with_sources(request.query)
         return result
+    except AgentProjectError:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询失败：{e}") from e
+        raise AgentProjectError("知识库查询失败", stage="knowledge_query", original=e) from e

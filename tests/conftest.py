@@ -6,8 +6,8 @@
   确定性假模型，测试完全不依赖真实 LLM / Embedding，零 API 费用、零网络。
 - 假 Chat 模型按 system prompt 内容返回不同脚本化回复，足以驱动诊断 Agent 的
   plan / replan / report 节点走完完整流程。
-- API 测试在路由层把 `get_orchestrator` 替换成返回固定事件流的桩，避免构造真实
-  ConversationAgent（其需要支持 bind_tools 的模型）。
+- API 测试通过夹具向 app.state.container 注入桩 orchestrator（CannedOrchestrator），
+  避免构造需要真实模型的 ConversationAgent。
 """
 import hashlib
 import sys
@@ -70,7 +70,14 @@ class ScriptedChatModel:
                 "## 处置建议\n示例处置建议\n## 参考资料\n- 故障排除.txt"
             )
         if "计划" in text or "json" in s or "排查" in text:
-            return _AIMessage('{"plan": ["查询设备运行状态", "查询耗材状态"]}')
+            # 结构化排查计划（与 prompts/diagnostic_plan.txt 的输出格式一致），
+            # 两个步骤都走设备状态查询（CSV mock），避免单测触发真实 RAG。
+            return _AIMessage(
+                '{"steps": ['
+                '{"description": "查询设备运行状态", "tool": "query_device_status", "arguments": {}},'
+                '{"description": "查询设备耗材与清洁效率", "tool": "query_device_status", "arguments": {}}'
+                ']}'
+            )
         if "意图" in text or "classif" in s or "conversation" in s:
             return _AIMessage("conversation")
         return _AIMessage("这是一条测试回复。")
@@ -85,10 +92,6 @@ class CannedOrchestrator:
                "content": "", "data": {"tool": "rag_summarize", "args": {}}}
         yield {"type": "message", "agent": "conversation", "content": "这是测试回复。"}
         yield {"type": "done", "agent": "conversation", "content": ""}
-
-    async def aexecute(self, query, history=None, mode=None):
-        for ev in self.execute(query, history, mode):
-            yield ev
 
 
 # --------------------------------------------------------------------- 自动打桩模型
@@ -129,11 +132,17 @@ def temp_vector_store(tmp_path):
 # --------------------------------------------------------------------- FastAPI 测试客户端
 @pytest.fixture
 def api_client(monkeypatch):
+    """未运行 lifespan 的测试客户端：显式注入容器（含桩 orchestrator）。
+
+    生产代码的 get_app_container 只认 app.state.container（不回退全局），
+    测试环境因此必须由夹具显式注入，验证路径与生产一致。
+    """
     from fastapi.testclient import TestClient
 
+    from api.container import AppContainer
     from api.main import app
 
-    fake = CannedOrchestrator()
-    monkeypatch.setattr("api.routes.conversation.get_orchestrator", lambda: fake)
-    monkeypatch.setattr("api.routes.diagnostic.get_orchestrator", lambda: fake)
+    container = AppContainer()
+    container._orchestrator = CannedOrchestrator()
+    monkeypatch.setattr(app.state, "container", container, raising=False)
     return TestClient(app)

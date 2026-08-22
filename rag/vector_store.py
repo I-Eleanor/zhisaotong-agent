@@ -9,7 +9,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from model.factory import get_embed_model
 from utils.config_handler import chroma_conf
 from utils.file_handler import get_file_md5_hex, listdir_with_allowed_type, pdf_loader, txt_loader
-from utils.logger_handler import logger
+from utils.logger_handler import logger, safe_exception_fields
 from utils.path_tool import get_abs_path
 
 
@@ -29,7 +29,7 @@ def _normalize_relevance_score(raw) -> float | None:
 
 
 class VectorStoreService:
-    def __init__(self, embedding_function=None, persist_directory: str = None, collection_name: str = None):
+    def __init__(self, embedding_function=None, persist_directory: str | None = None, collection_name: str | None = None):
         self.vector_store = Chroma(
             collection_name=collection_name or chroma_conf["collection_name"],
             embedding_function=embedding_function or get_embed_model(),
@@ -64,7 +64,7 @@ class VectorStoreService:
 
         return {"source_file": {"$in": list(source_files)}}
 
-    def get_retriever(self, k: int = None, source_files: list[str] | str = None):
+    def get_retriever(self, k: int | None = None, source_files: list[str] | str | None = None):
         """获取检索器。
 
         :param k: 召回数量，默认取配置中的 k
@@ -78,10 +78,11 @@ class VectorStoreService:
 
         return self.vector_store.as_retriever(search_kwargs=search_kwargs)
 
-    def search_with_scores(self, query: str, k: int = None, source_files: list[str] | str | None = None) -> list[Document]:
+    def search_with_scores(self, query: str, k: int | None = None, source_files: list[str] | str | None = None) -> list[Document]:
         """带相关性分数的检索：向量相关性分数写入 metadata['relevance_score']。
 
-        分数语义：0～1，越高越相关（分数缺失表示未知，由上层按低置信度处理）。
+        分数语义：0～1，越高越相关。relevance_score 专用于上层置信度判断
+        （与 confidence_threshold 同源）；分数缺失表示未知，由上层按低置信度处理。
         :param k: 召回数量，默认取配置中的 k
         :param source_files: 可选，将检索范围限定在指定的知识库文件
         """
@@ -106,6 +107,15 @@ class VectorStoreService:
                 doc.metadata["relevance_score"] = score
             documents.append(doc)
         return documents
+
+    def count(self) -> int:
+        """返回集合中的文档块数量（公开接口，供健康检查等使用）。
+
+        langchain-chroma 未暴露计数方法，这里通过公开的 get() 取回全部 id 计数，
+        不触碰底层私有属性；知识库规模（数千块）下仅取 id 的开销可接受。
+        """
+        result = self.vector_store.get(include=[])
+        return len(result.get("ids", []))
 
     @staticmethod
     def _enrich_metadata(documents: list[Document], file_path: str, chunk_index_offset: int = 0) -> list[Document]:
@@ -153,16 +163,18 @@ class VectorStoreService:
 
         for path in allowed_files_path:
             md5_hex = get_file_md5_hex(path)
+            # 日志只记录文件名：完整绝对路径属于本地环境信息，不进日志
+            file_name = os.path.basename(path)
 
             if check_md5_hex(md5_hex):
-                logger.info(f"[加载知识库]{path}内容已经存在知识库内，跳过")
+                logger.info({"event": "knowledge_load_skipped", "file": file_name, "reason": "md5_exists"})
                 continue
 
             try:
                 documents: list[Document] = get_file_documents(path)
 
                 if not documents:
-                    logger.warning(f"[加载知识库]{path}内没有有效文本内容，跳过")
+                    logger.warning({"event": "knowledge_load_skipped", "file": file_name, "reason": "empty_document"})
                     continue
 
                 self._enrich_metadata(documents, path)
@@ -170,7 +182,7 @@ class VectorStoreService:
                 split_document: list[Document] = self.spliter.split_documents(documents)
 
                 if not split_document:
-                    logger.warning(f"[加载知识库]{path}分片后没有有效文本内容，跳过")
+                    logger.warning({"event": "knowledge_load_skipped", "file": file_name, "reason": "empty_after_split"})
                     continue
 
                 for i, doc in enumerate(split_document):
@@ -180,9 +192,13 @@ class VectorStoreService:
 
                 save_md5_hex(md5_hex)
 
-                logger.info(f"[加载知识库]{path} 内容加载成功，共{len(split_document)}个分块")
+                logger.info({"event": "knowledge_load_success", "file": file_name, "chunk_count": len(split_document)})
             except Exception as e:
-                logger.error(f"[加载知识库]{path}加载失败：{str(e)}", exc_info=True)
+                logger.error({
+                    "event": "knowledge_load_failed",
+                    "file": file_name,
+                    **safe_exception_fields(e),
+                })
                 continue
 
 

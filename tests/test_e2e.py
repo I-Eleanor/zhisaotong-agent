@@ -29,7 +29,7 @@ def test_e2e_knowledge_chat_sse_complete(api_client):
     assert "done" in types, "应有 done 事件"
 
 
-def test_e2e_diagnostic_route_and_report(api_client, monkeypatch):
+def test_e2e_diagnostic_route_and_report(api_client):
     """故障问题路由到 Diagnostic Agent 并生成报告"""
     events_log = []
 
@@ -48,7 +48,10 @@ def test_e2e_diagnostic_route_and_report(api_client, monkeypatch):
                 events_log.append("done")
             return gen()
 
-    monkeypatch.setattr("api.routes.diagnostic.get_orchestrator", lambda: TrackingOrchestrator())
+    from api.main import app
+
+    # 路由经注入容器取 orchestrator：直接替换容器内的桩
+    app.state.container._orchestrator = TrackingOrchestrator()
     resp = api_client.post("/api/diagnose", json={"query": "扫地机充不进电"})
     assert resp.status_code == 200
     assert "route_diagnostic" in events_log, "应路由到 diagnostic"

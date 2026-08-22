@@ -7,16 +7,18 @@
     2. 未命中关键词 → 轻量 LLM 分类（conversation / diagnostic）
     3. LLM 不可用或失败 → 默认对话 Agent
 
-对外提供同步 execute()（供前端（React）/ 测试）与异步 aexecute()（供 Phase 2 SSE）。
+对外仅提供同步 execute()：API 层统一通过 SSE bridge（线程 + 有界队列）
+桥接到 FastAPI 异步路由，避免同一链路存在多套异步方案。
 """
-from collections.abc import AsyncIterator, Iterator
+import threading
+from collections.abc import Iterator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.conversation_agent import ConversationAgent
 from agent.diagnostic_agent import get_diagnostic_agent
 from agent.events import AgentEvent
-from utils.logger_handler import logger
+from utils.logger_handler import log_safe_text, logger, safe_exception_fields
 from utils.prompt_loader import load_orchestrator_prompt
 
 DIAGNOSTIC_KEYWORDS = [
@@ -41,9 +43,11 @@ RouteResult = str
 
 
 class Orchestrator:
-    def __init__(self, conversation_agent: ConversationAgent = None):
+    def __init__(self, conversation_agent: ConversationAgent | None = None, diagnostic_agent=None):
+        """conversation_agent / diagnostic_agent 均可注入（应用容器管理的依赖）；
+        未注入时回退各自的默认构造（保持旧调用方兼容）。"""
         self.conversation_agent = conversation_agent or ConversationAgent()
-        self.diagnostic_agent = get_diagnostic_agent()
+        self.diagnostic_agent = diagnostic_agent or get_diagnostic_agent()
 
     # ----------------------------------------------------------- 意图路由
 
@@ -80,41 +84,33 @@ class Orchestrator:
                 return MODE_DIAGNOSTIC
             return MODE_CONVERSATION
         except Exception as e:
-            logger.warning({"event": "route_llm_failed", "error": str(e), "fallback": MODE_CONVERSATION})
+            logger.warning({"event": "route_llm_failed", "fallback": MODE_CONVERSATION, **safe_exception_fields(e)})
             return MODE_CONVERSATION
 
     # ----------------------------------------------------------- 执行入口
 
-    def execute(self, user_query: str, history: list = None, mode: str = None) -> Iterator[AgentEvent]:
+    def execute(self, user_query: str, history: list | None = None, mode: str | None = None) -> Iterator[AgentEvent]:
         """统一同步执行入口，返回 SSE/UI 可消费的 AgentEvent 流。"""
         effective_mode = mode or self.route(user_query)
-        logger.info({"event": "orchestrator_execute", "mode": effective_mode, "query": user_query})
+        logger.info({"event": "orchestrator_execute", "mode": effective_mode, "query": log_safe_text(user_query)})
 
         if effective_mode == MODE_DIAGNOSTIC:
             yield from self.diagnostic_agent.run(user_query)
         else:
             yield from self.conversation_agent.stream(user_query, history)
 
-    async def aexecute(self, user_query: str, history: list = None, mode: str = None) -> AsyncIterator[AgentEvent]:
-        """统一异步执行入口（供 FastAPI SSE 使用）。"""
-        effective_mode = mode or self.route(user_query)
-        logger.info({"event": "orchestrator_aexecute", "mode": effective_mode, "query": user_query})
-
-        if effective_mode == MODE_DIAGNOSTIC:
-            for ev in self.diagnostic_agent.run(user_query):
-                yield ev
-        else:
-            async for ev in self.conversation_agent.astream(user_query, history):
-                yield ev
-
 
 _orchestrator = None
+_orchestrator_lock = threading.Lock()
 
 
 def get_orchestrator() -> Orchestrator:
+    """全局懒加载单例（双检锁防并发首次请求重复构建 Agent）。"""
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = Orchestrator()
+        with _orchestrator_lock:
+            if _orchestrator is None:
+                _orchestrator = Orchestrator()
     return _orchestrator
 
 

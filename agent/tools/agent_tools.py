@@ -1,4 +1,3 @@
-import traceback
 from datetime import datetime
 
 from langchain_core.tools import tool
@@ -8,49 +7,67 @@ from agent.services import (
     create_user_id_service,
     create_weather_service,
 )
-from utils.logger_handler import logger
-
-
-def _get_rag_summarize(query: str) -> str:
-    """懒加载知识库 Agent 并检索总结，避免导入本模块即触发 Embedding/向量库初始化。
-
-    与 diagnostic_tools.py 保持一致：重型依赖全部延迟到首次调用才创建。
-    """
-    from agent.knowledge_agent import get_knowledge_agent
-    return get_knowledge_agent().retrieve(query)
-
+from utils.logger_handler import log_safe_value, logger, safe_exception_fields
 
 weather_service = create_weather_service("mock")
 user_id_service = create_user_id_service("mock")
 external_data_service = create_external_data_service("csv")
 
+# 工具失败的固定安全文案：不含异常类型 / 路径 / 密钥 / 服务响应 / 用户输入
+_TOOL_FAILED_MESSAGE = "工具调用失败，请稍后重试"
+
 
 def _safe_call(tool_name: str, func, *args, **kwargs) -> str:
     try:
-        result = func(*args, **kwargs)
+        result = str(func(*args, **kwargs))
         logger.info({
             "event": "tool_success",
             "tool": tool_name,
-            "args": args,
-            "kwargs": kwargs,
+            "args": log_safe_value(args),
+            "kwargs": log_safe_value(kwargs),
         })
         return result
     except Exception as e:
         logger.error({
             "event": "tool_error",
             "tool": tool_name,
-            "args": args,
-            "kwargs": kwargs,
-            "error_type": type(e).__name__,
-            "error_msg": str(e),
-            "traceback": traceback.format_exc(),
+            "args": log_safe_value(args),
+            "kwargs": log_safe_value(kwargs),
+            **safe_exception_fields(e),
         })
-        return f"工具{tool_name}调用失败：{str(e)}，请稍后重试"
+        return _TOOL_FAILED_MESSAGE
 
 
-@tool(description="从向量存储中检索参考资料")
-def rag_summarize(query: str) -> str:
-    return _safe_call("rag_summarize", _get_rag_summarize, query)
+def build_rag_tool(knowledge_agent=None):
+    """构造 rag_summarize 工具；knowledge_agent 可注入（应用容器/测试）。
+
+    未注入时回退全局懒加载单例（旧行为不变），重型依赖仍延迟到首次调用。
+    """
+    kb = knowledge_agent
+
+    @tool(description="从向量存储中检索参考资料")
+    def rag_summarize(query: str) -> str:
+        from agent.knowledge_agent import get_knowledge_agent
+        target = kb if kb is not None else get_knowledge_agent()
+        return _safe_call("rag_summarize", target.retrieve, query)
+
+    return rag_summarize
+
+
+def build_conversation_tools(knowledge_agent=None) -> list:
+    """构造对话 Agent 全套工具；RAG 工具绑定注入的知识库 Agent。"""
+    return [
+        build_rag_tool(knowledge_agent),
+        get_weather,
+        get_user_id,
+        get_current_month,
+        fetch_external_data,
+        fill_context_for_report,
+    ]
+
+
+# 模块级默认工具（未注入依赖时的回退，保持旧调用方兼容）
+rag_summarize = build_rag_tool()
 
 
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")

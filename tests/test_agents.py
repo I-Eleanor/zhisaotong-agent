@@ -70,9 +70,8 @@ def test_to_events_skip_history_echo():
 def _base_state(**over):
     state = {
         "user_query": "扫地机不工作",
-        "plan": [],
-        "current_step_index": 0,
-        "execution_results": [],
+        "pending_steps": [],
+        "completed_steps": [],
         "iteration_count": 0,
         "final_report": "",
         "should_end": False,
@@ -82,25 +81,44 @@ def _base_state(**over):
     return state
 
 
+def _step(description="查询设备运行状态", tool="query_device_status", arguments=None):
+    from agent.diagnostic.schemas import DiagnosticStep
+
+    return DiagnosticStep(description=description, tool=tool, arguments=arguments or {})
+
+
 def test_planner_node_returns_plan():
     out = planner_node(_base_state())
-    assert isinstance(out["plan"], list) and out["plan"]
-    assert any("设备" in s for s in out["plan"])
+    steps = out["pending_steps"]
+    assert isinstance(steps, list) and steps
+    assert any("设备" in s.description for s in steps)
+    # plan 事件保持前端兼容：steps 为描述字符串列表
+    plan_event = out["events"][-1]
+    assert plan_event["type"] == "plan"
+    assert plan_event["data"]["steps"] == [s.description for s in steps]
 
 
 def test_executor_node_device_status():
-    out = executor_node(_base_state(plan=["查询设备运行状态"]))
-    assert out["events"][0]["type"] == "step"
-    assert out["execution_results"]
+    out = executor_node(_base_state(pending_steps=[_step()]))
+    assert out["events"][-1]["type"] == "step"
+    assert out["completed_steps"] and out["completed_steps"][0].result.success
+    assert out["pending_steps"] == [], "executor 只消费第一项"
 
 
 def test_replanner_node_end():
-    out = replanner_node(_base_state(plan=["查询设备运行状态"], execution_results=["ok"]))
+    completed = _base_state()["completed_steps"]
+    out = replanner_node(_base_state(
+        pending_steps=[_step()],
+        completed_steps=completed,
+    ))
     assert out["should_end"] is True
 
 
 def test_reporter_node_returns_report():
-    out = reporter_node(_base_state(execution_results=["步骤1结果"]))
+    from agent.diagnostic.schemas import CompletedStep, StepResult
+
+    completed = [CompletedStep(step=_step(), result=StepResult(success=True, content="步骤1结果"))]
+    out = reporter_node(_base_state(completed_steps=completed))
     assert "诊断报告" in out["final_report"]
 
 
@@ -189,31 +207,34 @@ def test_diagnostic_max_iterations():
     assert len(replan_events) <= 5, "迭代次数不应超过 MAX_ITERATIONS(5)"
 
 
-def test_planner_json_parse_fallback(monkeypatch):
-    from agent.diagnostic_agent import _llm_json
+def test_planner_json_parse_fallback():
+    from agent.diagnostic.parser import LlmParser
 
-    def bad_model(*a, **kw):
-        raise RuntimeError("LLM 故意失败")
+    class BadModel:
+        def invoke(self, messages, **kw):
+            raise RuntimeError("LLM 故意失败")
 
-    monkeypatch.setattr("agent.diagnostic_agent.get_chat_model", bad_model)
-    result = _llm_json("sys", "user")
-    assert result is None, "LLM 失败时应返回 None，由 planner 兜底"
+    parser = LlmParser(model=BadModel())
+    assert parser.parse_plan("sys", "user") is None, "LLM 失败时应返回 None，由 planner 兜底"
 
 
 def test_extract_json_with_code_fence():
-    from agent.diagnostic_agent import _extract_json
-    assert _extract_json('```json\n{"plan": ["步骤1"]}\n```') == {"plan": ["步骤1"]}
+    from agent.diagnostic.parser import extract_json
+
+    assert extract_json('```json\n{"plan": ["步骤1"]}\n```') == {"plan": ["步骤1"]}
 
 
 def test_extract_json_bare():
-    from agent.diagnostic_agent import _extract_json
-    assert _extract_json('["步骤1", "步骤2"]') == ["步骤1", "步骤2"]
+    from agent.diagnostic.parser import extract_json
+
+    assert extract_json('["步骤1", "步骤2"]') == ["步骤1", "步骤2"]
 
 
 def test_extract_json_empty():
-    from agent.diagnostic_agent import _extract_json
-    assert _extract_json("") is None
-    assert _extract_json("无JSON内容") is None
+    from agent.diagnostic.parser import extract_json
+
+    assert extract_json("") is None
+    assert extract_json("无JSON内容") is None
 
 
 # ----------------------------------------------------------------- ConversationBuffer 截断
@@ -239,3 +260,62 @@ def test_buffer_add_empty_content_ignored():
     buf = ConversationBuffer(max_rounds=5)
     buf.add_message("user", "")
     assert buf.recent_messages == [], "空内容不应写入"
+
+
+# ----------------------------------------------------------------- 异常日志收敛（P1-6）
+def test_knowledge_agent_error_log_uses_safe_summary(caplog):
+    """Agent 异常路径：日志用统一摘要（无 traceback / exc_info / 原始密钥），降级行为不变。"""
+    import logging
+
+    from agent.knowledge_agent import KnowledgeAgent
+
+    class BrokenRag:
+        def rag_summarize(self, query, source_files=None):
+            raise RuntimeError("检索失败：api_key=sk-AGENT-998877665544 连接中断")
+
+    agent = KnowledgeAgent(rag_service=BrokenRag())
+    with caplog.at_level(logging.ERROR, logger="agent"):
+        result = agent.retrieve("滤网怎么换")
+
+    assert result == "知识库检索暂时不可用，请稍后重试", "降级行为应保持不变"
+    entries = [
+        r.msg for r in caplog.records
+        if isinstance(r.msg, dict) and r.msg.get("event") == "knowledge_agent_error"
+    ]
+    assert entries, "应记录结构化错误日志"
+    entry = entries[-1]
+    assert entry["query"] == "滤网怎么换", "保留原有结构化上下文字段"
+    assert entry["error_type"] == "RuntimeError"
+    assert "sk-AGENT-998877665544" not in entry["error_msg"], "原始密钥不得进日志"
+    assert "traceback" not in entry, "不得记录 traceback 字段"
+
+    record = caplog.records[-1]
+    assert record.exc_info is None, "禁止 exc_info=True"
+
+
+def test_diagnostic_agent_error_log_uses_safe_summary(caplog):
+    """诊断 Agent 异常路径：日志无 traceback，仍发出 error + done 事件（事件协议不变）。"""
+    import logging
+
+    from agent.diagnostic.service import DiagnosticAgent
+
+    class BrokenGraph:
+        def stream(self, initial, stream_mode=None):
+            raise RuntimeError("图执行失败 sk-GRAPH-887766554433")
+            yield  # pragma: no cover
+
+    agent = DiagnosticAgent.__new__(DiagnosticAgent)
+    agent.graph = BrokenGraph()
+    with caplog.at_level(logging.ERROR, logger="agent"):
+        types = [ev["type"] for ev in agent.run("扫地机不工作")]
+
+    assert types == ["error", "done"], "事件协议不变：error 后必发 done"
+    entries = [
+        r.msg for r in caplog.records
+        if isinstance(r.msg, dict) and r.msg.get("event") == "diagnostic_agent_error"
+    ]
+    assert entries
+    entry = entries[-1]
+    assert entry["stage"] == "diagnostic"
+    assert "sk-GRAPH-887766554433" not in entry["error_msg"]
+    assert "traceback" not in entry
