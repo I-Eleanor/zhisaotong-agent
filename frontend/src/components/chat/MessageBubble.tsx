@@ -7,9 +7,11 @@ interface Props {
   content: string;
   status?: string;
   pending?: boolean;
+  /** 气泡上方的小标签（如“人工客服”），用于区分人工回复与机器人回复。 */
+  label?: string;
 }
 
-export function MessageBubble({ role, content, status, pending }: Props) {
+export function MessageBubble({ role, content, status, pending, label }: Props) {
   const isUser = role === "user";
   return (
     <div className={cn("flex gap-3 animate-fade-in", isUser ? "flex-row-reverse" : "flex-row")}>
@@ -35,6 +37,9 @@ export function MessageBubble({ role, content, status, pending }: Props) {
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {status}
           </div>
+        ) : null}
+        {label && content ? (
+          <div className="mb-1 text-xs font-medium text-primary">{label}</div>
         ) : null}
         {content ? (
           <div className="whitespace-pre-wrap">{content}</div>

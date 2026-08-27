@@ -103,7 +103,7 @@ def test_chat_sync_error_event_returns_structured_payload(api_client):
     """Agent 输出 error 事件时，/chat/sync 返回统一错误载荷（全字段精确断言）。"""
 
     class ErrorOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             yield {
                 "type": "error",
                 "agent": "conversation",
@@ -133,7 +133,7 @@ def test_chat_sync_error_event_does_not_leak_sensitive_content(api_client):
     secret = "sk-POISON-1234567890"
 
     class PoisonedOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             yield {
                 "type": "error",
                 "agent": "conversation",
@@ -165,7 +165,7 @@ def test_chat_sync_exception_returns_safe_payload(api_client):
     secret = "sk-leaked-key-456"
 
     class BrokenOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             raise RuntimeError(f"连接失败，密钥 {secret}")
             yield  # pragma: no cover
 
@@ -190,7 +190,7 @@ def test_chat_sync_project_exception_keeps_own_code(api_client):
     """Agent 抛出的项目异常保留自身错误码，不被包装成 INTERNAL_ERROR。"""
 
     class ModelBrokenOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             raise ModelInvocationError(f"模型连接失败 sk-inner-777: {query}")
             yield  # pragma: no cover
 
@@ -323,7 +323,7 @@ def test_error_handler_log_contains_request_id_type_stage(api_client, caplog):
     """全局 handler 的日志应包含 request_id / error_type / stage，便于排查。"""
 
     class BrokenOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             raise RuntimeError(f"连接失败 sk-log-key-321: {query}")
             yield  # pragma: no cover
 
@@ -424,7 +424,7 @@ def test_global_handler_log_redacts_and_omits_traceback(api_client, caplog):
     secret = "sk-HANDLER-112233445566"
 
     class BrokenOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             raise RuntimeError(f"api_key={secret} 连接失败")
             yield  # pragma: no cover
 

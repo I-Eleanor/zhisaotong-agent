@@ -1,4 +1,5 @@
-import { Bot } from "lucide-react";
+import { Bot, ClipboardList } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function AppHeader() {
@@ -13,7 +14,17 @@ export function AppHeader() {
           <p className="text-xs text-muted-foreground">扫地机器人智能客服</p>
         </div>
       </div>
-      <ThemeToggle />
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="打开人工工单管理"
+          onClick={() => (window.location.hash = "#/admin/handoffs")}
+        >
+          <ClipboardList className="h-4 w-4" /> 工单管理
+        </Button>
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

@@ -87,7 +87,7 @@ class ScriptedChatModel:
 class CannedOrchestrator:
     """API 测试用：返回固定事件流，完全绕开真实 Agent 与模型。"""
 
-    def execute(self, query, history=None, mode=None):
+    def execute(self, query, history=None, mode=None, conversation_id=None):
         yield {"type": "tool_start", "agent": "conversation",
                "content": "", "data": {"tool": "rag_summarize", "args": {}}}
         yield {"type": "message", "agent": "conversation", "content": "这是测试回复。"}

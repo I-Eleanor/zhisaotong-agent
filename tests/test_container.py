@@ -194,10 +194,11 @@ def _patch_container_resources(monkeypatch):
             self.model = model
 
     class FakeOrchestrator:
-        def __init__(self, conversation_agent=None, diagnostic_agent=None):
+        def __init__(self, conversation_agent=None, diagnostic_agent=None, handoff_tickets=None):
             counters["orch"] += 1
             self.conversation_agent = conversation_agent
             self.diagnostic_agent = diagnostic_agent
+            self.handoff_tickets = handoff_tickets
 
     def _fake_chat(self=None):
         counters["chat"] += 1

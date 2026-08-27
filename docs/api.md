@@ -139,7 +139,164 @@ data: {"type": "done", "agent": "conversation", "content": ""}
 
 ---
 
-## 6. 错误与排查
+## 6. 人工转接（Handoff）
+
+当用户主动要求转人工（如「转人工 / 人工客服 / 联系人工」）且 RAG 回答无法满足时，Orchestrator 拦截并自动创建人工工单。用户凭一次性 `access_key` 查询，管理员经会话 Cookie 鉴权后统一处理。
+
+### 6.1 用户创建工单
+
+`POST /api/handoff`
+
+**请求体（HandoffCreateRequest）**
+
+```json
+{
+  "user_question": "机器一直报错 E03，帮我转人工",
+  "conversation_id": "conv-a",
+  "recent_conversations": [{"role": "user", "content": "机器报错"}],
+  "conversation_summary": "用户反馈故障码",
+  "retrieval_sources": [{"document": "故障排除.txt", "score": 0.31}],
+  "diagnostic_result": "疑似门锁传感器故障",
+  "handoff_reason": "rag_low_confidence"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `user_question` | string | 用户问题（必填，非空） |
+| `conversation_id` | string \| null | 会话关联标识，**不是访问凭证** |
+| `recent_conversations` | list \| str \| null | 最近对话内容 |
+| `conversation_summary` | string | 对话摘要 |
+| `retrieval_sources` | list \| str \| null | RAG 来源 |
+| `diagnostic_result` | string | 诊断结果 |
+| `handoff_reason` | string | 转人工原因，默认 `user_request` |
+
+**响应 `201`**：完整工单 + 一次性明文 `access_key`（仅此一次下发）。
+
+```json
+{
+  "ticket_id": "c9f2...",
+  "conversation_id": "conv-a",
+  "user_question": "机器一直报错 E03，帮我转人工",
+  "status": "pending",
+  "human_reply": null,
+  "handoff_reason": "rag_low_confidence",
+  "created_at": "2026-08-27T10:00:00+00:00",
+  "updated_at": "2026-08-27T10:00:00+00:00",
+  "access_key": "k1P...43 字符"
+}
+```
+
+### 6.2 用户查询工单
+
+`GET /api/handoff/{ticket_id}?access_key=<access_key>`
+
+- **Query**：`access_key`（用户创建时拿到的一次性凭证）。
+- **响应 `200`**：工单对象（含 `human_reply`、最新 `status`），**不含 `access_key` / `access_key_hash`**。
+- **响应 `404`**：凭证缺失 / 错误 / 工单不存在 → 统一 `HANDOFF_TICKET_NOT_FOUND`，不泄露工单存在性。
+
+### 6.3 管理员登录
+
+`POST /api/admin/login`
+
+**请求体（AdminLoginRequest）**
+
+```json
+{ "admin_token": "<ADMIN_TOKEN>" }
+```
+
+**响应 `200`** + `Set-Cookie`：
+
+```json
+{ "success": true, "message": "登录成功", "request_id": "..." }
+```
+
+```
+Set-Cookie: admin_session=<sid>; HttpOnly; Secure; SameSite=lax; Max-Age=<ttl>; Path=/
+```
+
+- Cookie 名为 **`admin_session`**，为 **HttpOnly** 管理会话 Cookie（`Secure` / `SameSite=lax` / `Max-Age` = `ADMIN_SESSION_TTL_SECONDS`，默认 8 小时）。
+- 会话保存在**服务端内存**（单进程），服务重启后失效，需重新登录。
+- **`401`**：令牌错误 → `HANDOFF_ADMIN_REQUIRED`。
+- **`403`**：`ADMIN_TOKEN` 未配置，管理端整体禁用 → `HANDOFF_ADMIN_DISABLED`。
+
+### 6.4 管理端工单列表
+
+`GET /api/admin/handoffs?status=&limit=&offset=`
+
+需要有效管理会话 Cookie（`admin_session`）。
+
+| Query | 类型 | 说明 |
+|-------|------|------|
+| `status` | string \| 空 | 过滤状态：`pending` / `processing` / `resolved` / `closed` |
+| `limit` | int | 页大小，默认 `20`，上限 `100` |
+| `offset` | int | 偏移，默认 `0` |
+
+**响应 `200`**（按 `created_at` 倒序）：
+
+```json
+{ "total": 3, "limit": 20, "offset": 0, "items": [ { "ticket_id": "...", "status": "pending", "...": "..." } ] }
+```
+
+### 6.5 管理端工单详情
+
+`GET /api/admin/handoffs/{ticket_id}`
+
+**响应 `200`**：工单详情（含 `user_question`、`conversation_summary`、`retrieval_sources`、`diagnostic_result`、`human_reply` 等完整上下文），**不回显 `access_key` / `access_key_hash`**。
+
+**响应 `404`**：工单不存在 → `HANDOFF_TICKET_NOT_FOUND`。
+
+### 6.6 管理端回复工单
+
+`POST /api/admin/handoffs/{ticket_id}/reply`
+
+**请求体（HandoffReplyRequest）**
+
+```json
+{
+  "human_reply": "已为您转接售后，问题已解决。",
+  "status": "resolved"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `human_reply` | string | 人工回复（必填） |
+| `status` | string \| null | 更新后的状态，缺省默认 `resolved` |
+
+**响应 `200`**：更新后的工单（`status` / `human_reply` / `updated_at` 已更新）。
+
+### 6.7 鉴权与会话说明
+
+- **管理会话 Cookie（`admin_session`）**：HttpOnly / Secure / SameSite=lax，前端 JS 无法读取；管理接口统一校验该 Cookie 对应的服务端会话，旧版请求头鉴权方式已弃用。
+- **`access_key` 查询凭证**：仅创建时下发一次；前端仅内存保存；SQLite 只存 SHA-256 哈希（`access_key_hash`）；用户凭它查询工单状态，可在管理员回复后看到 `human_reply` 与 `resolved`。
+
+### 6.8 错误码与状态
+
+工单状态取值：`pending`、`processing`、`resolved`、`closed`。
+
+| HTTP | 错误码 | 触发场景 |
+|------|--------|----------|
+| `401` | `HANDOFF_ADMIN_REQUIRED` | 管理会话缺失 / 无效 / 过期；`/login` 令牌错误 |
+| `403` | `HANDOFF_ADMIN_DISABLED` | `ADMIN_TOKEN` 未配置，管理端整体禁用 |
+| `404` | `HANDOFF_TICKET_NOT_FOUND` | 工单不存在；用户侧凭证缺失/错误统一 404 |
+| `422` | — | `status` 非法、`human_reply`/`user_question` 为空等字段校验失败（FastAPI 标准 422） |
+| `500` | `INTERNAL_ERROR` / `HANDOFF_TICKET_CREATE_FAILED` | 存储异常（自动建单失败在 SSE 中表现为 `error` 事件） |
+| `503` | `HANDOFF_DB_NOT_CONFIGURED` | `HANDOFF_DB_PATH` 未配置，工单服务不可用 |
+
+统一错误响应体（非 422 场景）：
+
+```json
+{ "error_code": "...", "safe_message": "...", "request_id": "..." }
+```
+
+### 6.9 安全约定
+
+- `access_key` **不返回给管理接口**，`access_key_hash` **不对外暴露**（任何接口、SSE 事件、日志均不回显）。
+
+---
+
+## 7. 错误与排查
 
 | 现象 | 可能原因 | 排查 |
 |------|----------|------|
@@ -150,7 +307,7 @@ data: {"type": "done", "agent": "conversation", "content": ""}
 
 ---
 
-## 7. 调用示例（curl）
+## 8. 调用示例（curl）
 
 ```bash
 # 健康检查
@@ -169,4 +326,24 @@ curl -N -X POST http://localhost:8000/api/diagnose \
 # 上传知识文档（Windows 请用绝对路径，避免 /tmp 风格路径导致读取失败）
 curl -X POST http://localhost:8000/api/knowledge/upload \
   -F "files=@D:/path/to/doc.txt"
+
+# 创建人工工单（响应含一次性 access_key）
+curl -X POST http://localhost:8000/api/handoff \
+  -H "Content-Type: application/json" \
+  -d '{"user_question":"帮我转人工"}'
+
+# 用户凭 access_key 查询工单
+curl "http://localhost:8000/api/handoff/<ticket_id>?access_key=<access_key>"
+
+# 管理员登录（保存 admin_session Cookie 到 cookie jar）
+curl -c cookie.txt -X POST http://localhost:8000/api/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"admin_token":"<ADMIN_TOKEN>"}'
+
+# 管理端列表 / 详情 / 回复（携带会话 Cookie）
+curl -b cookie.txt "http://localhost:8000/api/admin/handoffs?status=pending"
+curl -b cookie.txt "http://localhost:8000/api/admin/handoffs/<ticket_id>"
+curl -b cookie.txt -X POST "http://localhost:8000/api/admin/handoffs/<ticket_id>/reply" \
+  -H "Content-Type: application/json" \
+  -d '{"human_reply":"已解决。","status":"resolved"}'
 ```

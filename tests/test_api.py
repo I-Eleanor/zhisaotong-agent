@@ -253,7 +253,7 @@ async def test_sync_agent_call_does_not_block_event_loop(monkeypatch):
     release = threading.Event()
 
     class SlowOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             entered.set()  # 已进入同步 execute（模拟慢 LLM）
             deadline = time.monotonic() + 5
             while not release.is_set() and time.monotonic() < deadline:
