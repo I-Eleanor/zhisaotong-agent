@@ -143,6 +143,9 @@ docker compose up -d --build
 | `DASHSCOPE_API_KEY` | ❌ | 在线 Embedding 备选（当前走本地，可留空） |
 | `CORS_ORIGINS` | ❌ | 允许的跨域来源，默认 `*` |
 | `API_TOKEN` | ❌ | API 鉴权 Token，留空不强制鉴权 |
+| `HANDOFF_DB_PATH` | ❌ | 人工工单 SQLite 路径，未配置时工单接口返回 503 |
+| `ADMIN_TOKEN` | ❌ | 管理端登录令牌（`POST /api/admin/login` 校验），未配置时管理接口与登录整体禁用 403 |
+| `ADMIN_SESSION_TTL_SECONDS` | ❌ | 管理会话有效期（秒），默认 8 小时 |
 | `LLM_TIMEOUT_SECONDS` | ❌ | LLM 调用超时，默认 60 |
 
 ### 核心配置文件
@@ -213,6 +216,42 @@ python eval/eval_answer.py --split test
 | 健康检查分级 | `/api/health/live`（存活探针）· `/api/health/ready`（就绪探针，检查向量库+模型） |
 | API 安全 | 限流（slowapi）· Token 鉴权 · 请求体大小限制 · 文件上传白名单/大小/数量限制 |
 | 配置安全 | CORS 来源从环境变量读取 · .env.example 仅占位符 · 日志脱敏 API Key |
+
+---
+
+## 人工兜底机制
+
+当 RAG 无法回答用户问题且用户主动要求人工时，系统将对话转接为「人工工单」，供管理员统一查看、跟进与回复。当前为**轻量 MVP**：单管理员、文本回复与状态流转，不包含实时人工聊天与 WebSocket。
+
+### 触发与自动建单
+
+1. **用户主动输入转人工关键词**（如「转人工 / 人工客服 / 联系人工」）被 Orchestrator 拦截；
+2. 系统**自动创建人工工单**并持久化到 SQLite（`HANDOFF_DB_PATH`）；
+3. 事件流依次下发 `handoff_suggested`、`handoff_created`（后随 `done`）；
+4. `handoff_created` 事件携带 `ticket_id`、`status`（`pending`）以及一次性 `access_key`。
+
+### access_key 凭证保护
+
+- `access_key` **仅通过创建流程下发一次**（`POST /api/handoff` 的 201 响应，或 SSE `handoff_created` 事件）；
+- 前端拿到后在**内存**保存，仅用于后续凭它查询工单，**不渲染、不落盘**；
+- SQLite 中**只保存 `access_key` 的 SHA-256 哈希**（`access_key_hash`），明文不落库、不写日志、不进入任何工单响应。
+
+### 管理员会话与回复
+
+1. 管理员调用 **`POST /api/admin/login`**（提交 `admin_token` = 环境变量 `ADMIN_TOKEN`）登录；
+2. 登录成功后端下发 **HttpOnly 管理会话 Cookie**（`admin_session`，含 `Secure` / `SameSite` / `Max-Age`），前端 JS 无法读取；
+3. 经管理接口**查看工单列表、查看上下文、输入人工回复**，回复后状态可置为 `resolved` / `processing` 等；
+4. 用户通过 **`GET /api/handoff/{ticket_id}?access_key=...`** 查询工单状态，可在管理员回复后看到 `human_reply` 与最新状态。
+
+接口细节见 [docs/api.md](docs/api.md#6-人工转接handoff)，完整流程见 [docs/architecture.md](docs/architecture.md#44-人工转接handoff)。
+
+### 注意事项（MVP 局限）
+
+- 管理会话为**单进程内存**存储，服务重启后失效，需重新登录；
+- 跨源（不同端口/域名）部署时后端需开启 CORS `allow_credentials`；
+- 开启带凭据跨源时 `CORS_ORIGINS` **不能配置为 `*`**，必须为显式来源列表；
+- SQLite **多 worker 写并发能力有限**，高并发工单写入需更换数据库或加锁策略；
+- 当前为人工工单的**非实时**模型，不支持实时人工聊天与 WebSocket 推送。
 
 ---
 

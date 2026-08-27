@@ -112,6 +112,35 @@ React 前端 ──HTTP+SSE──▶ FastAPI(API 层) ──▶ Orchestrator(路
 前端触发重建 → POST /api/knowledge/rebuild → VectorStoreService 增量入库 → 返回 chunk 数
 ```
 
+### 4.4 人工转接（Handoff）
+
+当用户主动要求转人工（关键词命中）时，Orchestrator 拦截并自动创建人工工单，形成「用户 → 工单 → 管理员回复 → 用户回查」的完整闭环：
+
+```
+用户输入转人工关键词
+  → Orchestrator 拦截 → [handoff_suggested 事件]
+  → 自动创建工单（SQLite，status=pending）→ [handoff_created 事件，携带 ticket_id + access_key + status]
+  → [done 事件]
+  → 用户侧：前端仅内存保存 access_key
+  → 管理员 POST /api/admin/login（校验 ADMIN_TOKEN）→ 下发 HttpOnly 会话 Cookie（admin_session）
+  → 管理员 GET /api/admin/handoffs* 查看工单列表与上下文（对话摘要 / RAG 来源 / 诊断结果）
+  → 管理员 POST /api/admin/handoffs/{ticket_id}/reply 回复 → 状态置为 resolved / processing...
+  → 用户 GET /api/handoff/{ticket_id}?access_key=... 查询 → 看到 human_reply 与 resolved
+```
+
+**安全设计**
+
+- `access_key` 仅创建时下发一次；SQLite 只存 SHA-256 哈希（`access_key_hash`）；前端仅内存保存、不渲染；管理接口与任何 SSE 事件、日志均不回显 `access_key` / `access_key_hash`。
+- 管理会话 Cookie（`admin_session`）为 `HttpOnly` / `Secure` / `SameSite=lax` / `Max-Age`，服务端内存校验，旧版请求头鉴权方式已弃用。
+- 管理接口统一校验服务端会话；`ADMIN_TOKEN` 未配置时管理端整体禁用（403）。
+
+**MVP 局限**
+
+- 管理会话为**单进程内存**存储，服务重启后失效，需重新登录；
+- 跨源部署需后端 CORS `allow_credentials`，且开启凭据跨源时 `CORS_ORIGINS` **不能配置为 `*`**；
+- SQLite **多 worker 写并发能力有限**；
+- 不支持**实时人工聊天与 WebSocket**，用户侧通过凭 `access_key` 再次查询获取状态更新。
+
 ---
 
 ## 5. SSE 桥接设计

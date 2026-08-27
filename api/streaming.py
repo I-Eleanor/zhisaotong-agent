@@ -26,7 +26,7 @@ from contextlib import suppress
 
 from sse_starlette.sse import EventSourceResponse
 
-from agent.events import AgentEvent
+from agent.events import NON_DROPPABLE_EVENT_TYPES, AgentEvent
 from utils import error_codes
 from utils.logger_handler import logger, safe_exception_fields
 from utils.request_context import get_request_id, set_request_id
@@ -100,11 +100,15 @@ def build_sse_stream(
 
             loop.call_soon_threadsafe(_run)
 
-        def schedule_signal(kind: str) -> None:
-            """终止信号（error / done）→ 独立控制队列；非阻塞、永不丢弃。"""
+        def schedule_signal(kind: str, payload: AgentEvent | None = None) -> None:
+            """终止信号（error / done）与不可丢弃事件 → 独立控制队列；非阻塞、永不丢弃。
+
+            控制队列为无界（error + done + 关键事件总量极小），handoff 等关键事件
+            与业务事件彻底分离，任意 queue_maxsize（含 1）下都永不丢失。
+            """
 
             def _run() -> None:
-                control.put_nowait(kind)
+                control.put_nowait((kind, payload))
                 wakeup.set()
 
             loop.call_soon_threadsafe(_run)
@@ -118,7 +122,11 @@ def build_sse_stream(
                 for event in gen:
                     if stop.is_set():
                         break
-                    schedule_event(event)
+                    if event.get("type") in NON_DROPPABLE_EVENT_TYPES:
+                        # 转人工等关键事件走控制通道：有界队列满也不允许静默丢弃
+                        schedule_signal("event", event)
+                    else:
+                        schedule_event(event)
             except Exception as e:
                 logger.error({
                     "event": "sse_producer_error",
@@ -169,14 +177,18 @@ def build_sse_stream(
                     yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
                     continue
 
-                # 2. 业务队列空：处理控制信号（error / done）
+                # 2. 业务队列空：处理控制信号（error / 关键事件 / done）
                 try:
-                    signal = control.get_nowait()
+                    signal, payload = control.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
                 else:
                     if signal == "error":
                         yield safe_error_event
+                        continue
+                    if signal == "event":
+                        # 不可丢弃的关键事件（如 handoff），按普通 message 帧下发
+                        yield {"event": "message", "data": json.dumps(payload, ensure_ascii=False)}
                         continue
                     break  # done：流正常结束
 

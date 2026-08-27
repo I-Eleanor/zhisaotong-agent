@@ -153,6 +153,7 @@ class AppContainer:
         from agent.diagnostic.parser import LlmParser
         from agent.diagnostic.service import DiagnosticAgent
         from agent.diagnostic.tool_router import ToolRouter
+        from agent.handoff_tickets import HandoffTicketService
         from agent.knowledge_agent import KnowledgeAgent
         from agent.orchestrator import Orchestrator
         from agent.tools.agent_tools import build_conversation_tools
@@ -167,7 +168,11 @@ class AppContainer:
             tool_router=ToolRouter(knowledge_agent=knowledge),
             model=self.chat_model,
         )
-        return Orchestrator(conversation_agent=conversation_agent, diagnostic_agent=diagnostic_agent)
+        return Orchestrator(
+            conversation_agent=conversation_agent,
+            diagnostic_agent=diagnostic_agent,
+            handoff_tickets=HandoffTicketService(),
+        )
 
     # ------------------------------------------- 生命周期
     @property

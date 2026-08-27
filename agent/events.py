@@ -15,6 +15,8 @@
     report      诊断 Agent 产出最终诊断报告
     error       执行过程中发生异常
     done        本次执行结束
+    handoff_suggested  建议转人工（用户显式请求等触发）
+    handoff_created    已创建人工转接工单（预留，当前未产出）
 """
 from collections.abc import Iterator
 from typing import Any, TypedDict
@@ -38,10 +40,23 @@ EVENT_TYPE_REPLAN: str = "replan"
 EVENT_TYPE_REPORT: str = "report"
 EVENT_TYPE_ERROR: str = "error"
 EVENT_TYPE_DONE: str = "done"
+EVENT_TYPE_HANDOFF_SUGGESTED: str = "handoff_suggested"
+EVENT_TYPE_HANDOFF_CREATED: str = "handoff_created"
+EVENT_TYPE_HANDOFF_HUMAN_SERVICE: str = "handoff_human_service"
 
 VALID_EVENT_TYPES: frozenset[str] = frozenset({
     EVENT_TYPE_ROUTE, EVENT_TYPE_THINKING, EVENT_TYPE_MESSAGE, EVENT_TYPE_TOOL_START, EVENT_TYPE_TOOL_END,
     EVENT_TYPE_PLAN, EVENT_TYPE_STEP, EVENT_TYPE_REPLAN, EVENT_TYPE_REPORT,
+    EVENT_TYPE_ERROR, EVENT_TYPE_DONE,
+    EVENT_TYPE_HANDOFF_SUGGESTED, EVENT_TYPE_HANDOFF_CREATED, EVENT_TYPE_HANDOFF_HUMAN_SERVICE,
+})
+
+# 关键业务事件：在 SSE 桥中不允许因有界队列满被丢弃，且必须保持生产顺序。
+# 转人工事件族（suggested → created → human_service）必须按序透传；error / done 属于必达的
+# 结束类事件，同样纳入——转人工流程全走无界控制队列，严格 FIFO，
+# 不会因"业务队列优先排空"而被提前输出或丢失。
+NON_DROPPABLE_EVENT_TYPES: frozenset[str] = frozenset({
+    EVENT_TYPE_HANDOFF_SUGGESTED, EVENT_TYPE_HANDOFF_CREATED, EVENT_TYPE_HANDOFF_HUMAN_SERVICE,
     EVENT_TYPE_ERROR, EVENT_TYPE_DONE,
 })
 
@@ -84,6 +99,12 @@ def event_to_text(event: AgentEvent) -> str:
 
     if event_type == EVENT_TYPE_ERROR:
         return f"[错误] {content}\n"
+
+    if event_type in (EVENT_TYPE_HANDOFF_SUGGESTED, EVENT_TYPE_HANDOFF_CREATED):
+        return f"[转人工] {content}\n"
+
+    if event_type == EVENT_TYPE_HANDOFF_HUMAN_SERVICE:
+        return f"[人工服务] {content}\n"
 
     return content
 

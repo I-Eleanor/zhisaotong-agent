@@ -16,7 +16,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from api.container import AppContainer, ContainerState, get_mounted_container
-from api.routes import conversation, diagnostic, knowledge
+from api.routes import conversation, diagnostic, handoff, knowledge
 from api.security import RequestSizeLimitMiddleware, TokenAuthMiddleware, limiter
 from api.streaming import shutdown_sse_executor
 from utils import error_codes
@@ -165,6 +165,7 @@ async def request_context_middleware(request: Request, call_next):
 app.include_router(conversation.router, prefix="/api")
 app.include_router(diagnostic.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
+app.include_router(handoff.router, prefix="/api")
 
 
 @app.get("/api/health")

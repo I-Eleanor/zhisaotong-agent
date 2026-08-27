@@ -92,4 +92,21 @@ def test_valid_event_types():
     assert "message" in VALID_EVENT_TYPES
     assert "done" in VALID_EVENT_TYPES
     assert "route" in VALID_EVENT_TYPES
-    assert len(VALID_EVENT_TYPES) == 11
+    assert "handoff_suggested" in VALID_EVENT_TYPES
+    assert "handoff_created" in VALID_EVENT_TYPES
+    assert "handoff_human_service" in VALID_EVENT_TYPES
+    assert len(VALID_EVENT_TYPES) == 14
+
+
+def test_event_to_text_handoff_suggested():
+    text = event_to_text({"type": "handoff_suggested", "content": "已收到您的转人工请求"})
+    assert "[转人工]" in text
+    assert "已收到您的转人工请求" in text
+
+
+def test_non_droppable_handoff_events():
+    """handoff 事件族在 SSE 桥中不可因队列满被丢弃。"""
+    from agent.events import NON_DROPPABLE_EVENT_TYPES
+
+    assert "handoff_suggested" in NON_DROPPABLE_EVENT_TYPES
+    assert "handoff_created" in NON_DROPPABLE_EVENT_TYPES

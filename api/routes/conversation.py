@@ -26,7 +26,10 @@ async def chat(request: ChatRequest, container: AppContainer = Depends(get_app_c
     orchestrator = container.orchestrator
 
     def run():
-        return orchestrator.execute(request.query, request.history, request.mode)
+        return orchestrator.execute(
+            request.query, request.history, request.mode,
+            conversation_id=request.conversation_id,
+        )
 
     return sse_bridge(run, request_id=rid)
 
@@ -45,10 +48,17 @@ def chat_sync(request: ChatRequest, container: AppContainer = Depends(get_app_co
 
     try:
         answer = ""
-        for event in orchestrator.execute(request.query, request.history, request.mode):
+        need_handoff = False
+        for event in orchestrator.execute(
+            request.query, request.history, request.mode,
+            conversation_id=request.conversation_id,
+        ):
             etype = event.get("type", "")
             if etype == "message":
                 answer += event.get("content", "")
+            elif etype == "handoff_suggested" or etype == "handoff_created":
+                # 转人工事件：不计入 answer，只置标记（工单由前端/调用方提交 POST /api/handoff）
+                need_handoff = True
             elif etype == "error":
                 data = event.get("data") or {}
                 code = normalize_error_code(data.get("error_code"))
@@ -64,7 +74,7 @@ def chat_sync(request: ChatRequest, container: AppContainer = Depends(get_app_co
                     "safe_message": CHAT_SYNC_ERROR_SAFE_MESSAGE,
                     "request_id": rid,
                 })
-        return {"answer": answer.strip()}
+        return {"answer": answer.strip(), "need_handoff": need_handoff}
     except AgentProjectError:
         raise
     except Exception as e:

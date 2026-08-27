@@ -1,6 +1,89 @@
-import type { AgentEvent, ChatMessage, HealthInfo } from "./types";
+import type {
+  AdminHandoffTicket,
+  AdminHandoffsResponse,
+  AdminReplyPayload,
+  AgentEvent,
+  ChatMessage,
+  HandoffTicket,
+  HealthInfo,
+} from "./types";
+import { AdminApiError } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+
+/** 解析管理接口错误：401/403 抛出带状态码的 AdminApiError。 */
+async function adminError(resp: Response): Promise<Error> {
+  const err = await resp.json().catch(() => ({}));
+  const message =
+    (err as { safe_message?: string }).safe_message ||
+    (err as { detail?: string }).detail ||
+    (err as { error_code?: string }).error_code ||
+    (err as { message?: string }).message ||
+    `请求失败 (${resp.status})`;
+  if (resp.status === 401 || resp.status === 403) {
+    return new AdminApiError(resp.status, message);
+  }
+  return new Error(message);
+}
+
+// 管理端接口鉴权基于服务端会话（HttpOnly Cookie）。
+// 请求须携带凭据（credentials: include）以自动带上 Cookie，不再发送任何 Token 头。
+function adminFetchInit(): RequestInit {
+  return { credentials: "include", headers: { "Content-Type": "application/json" } };
+}
+
+export async function adminLogin(adminToken: string): Promise<{ admin_enabled: boolean; cookie_host?: string }> {
+  const resp = await fetch(`${API_BASE}/api/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ admin_token: adminToken }),
+  });
+  if (!resp.ok) throw await adminError(resp);
+  return resp.json();
+}
+
+export interface AdminListOptions {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function adminListHandoffs(options: AdminListOptions = {}): Promise<AdminHandoffsResponse> {
+  const params = new URLSearchParams();
+  if (options.status) params.set("status", options.status);
+  if (options.limit != null) params.set("limit", String(options.limit));
+  if (options.offset != null) params.set("offset", String(options.offset));
+  const qs = params.toString();
+  const resp = await fetch(`${API_BASE}/api/admin/handoffs${qs ? `?${qs}` : ""}`, {
+    method: "GET",
+    ...adminFetchInit(),
+  });
+  if (!resp.ok) throw await adminError(resp);
+  return resp.json();
+}
+
+export async function adminGetHandoff(ticketId: string): Promise<AdminHandoffTicket> {
+  const resp = await fetch(`${API_BASE}/api/admin/handoffs/${encodeURIComponent(ticketId)}`, {
+    method: "GET",
+    ...adminFetchInit(),
+  });
+  if (!resp.ok) throw await adminError(resp);
+  return resp.json();
+}
+
+export async function adminReplyHandoff(
+  ticketId: string,
+  payload: AdminReplyPayload
+): Promise<AdminHandoffTicket> {
+  const resp = await fetch(`${API_BASE}/api/admin/handoffs/${encodeURIComponent(ticketId)}/reply`, {
+    method: "POST",
+    ...adminFetchInit(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw await adminError(resp);
+  return resp.json();
+}
 
 /**
  * 消费后端 SSE 流（POST + JSON body）。使用 XHR，避免浏览器扩展拦截 fetch。
@@ -97,15 +180,68 @@ export async function streamAgent(
   });
 }
 
-export async function syncChat(query: string, history: ChatMessage[], mode?: string): Promise<{ answer: string }> {
+export interface SyncChatResult {
+  answer: string;
+  need_handoff?: boolean;
+}
+
+export async function syncChat(
+  query: string,
+  history: ChatMessage[],
+  mode?: string,
+  conversationId?: string
+): Promise<SyncChatResult> {
   const resp = await fetch(`${API_BASE}/api/chat/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, history, mode }),
+    body: JSON.stringify({ query, history, mode, conversation_id: conversationId }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || `同步请求失败 (${resp.status})`);
+  }
+  return resp.json();
+}
+
+interface CreateHandoffPayload {
+  user_question: string;
+  conversation_id?: string;
+  conversation_summary?: string;
+  recent_conversations?: ChatMessage[] | string;
+  retrieval_sources?: unknown;
+  diagnostic_result?: string;
+  handoff_reason?: string;
+}
+
+/**
+ * 创建人工工单。创建成功返回工单（含一次性 access_key）。
+ * access_key 仅在此处获得，调用方应保持在当前前端会话，且不得写入聊天消息内容。
+ */
+export async function createHandoffTicket(payload: CreateHandoffPayload): Promise<HandoffTicket> {
+  const resp = await fetch(`${API_BASE}/api/handoff`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.safe_message || `工单创建失败 (${resp.status})`);
+  }
+  return resp.json();
+}
+
+/** 用 access_key 查询工单最新状态（不涉及凭证外泄，仅当前会话内存中使用）。 */
+export async function fetchHandoffTicket(
+  ticketId: string,
+  accessKey: string
+): Promise<HandoffTicket> {
+  const resp = await fetch(
+    `${API_BASE}/api/handoff/${encodeURIComponent(ticketId)}?access_key=${encodeURIComponent(accessKey)}`,
+    { method: "GET" }
+  );
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.safe_message || `工单查询失败 (${resp.status})`);
   }
   return resp.json();
 }
