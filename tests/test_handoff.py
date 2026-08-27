@@ -186,9 +186,8 @@ def test_chat_sync_returns_need_handoff_true(handoff_chat_client):
 
 
 def test_chat_sync_normal_flow_need_handoff_false(api_client):
-    from tests.conftest import CannedOrchestrator
-
     from api.main import app
+    from tests.conftest import CannedOrchestrator
 
     app.state.container._orchestrator = CannedOrchestrator()
     resp = api_client.post("/api/chat/sync", json={"query": "你好"})
@@ -326,6 +325,7 @@ def test_chat_sse_real_handoff_emits_created_with_access_key(api_client, tmp_pat
     """真实 HandoffTicketService + SQLite：SSE 流产出 handoff_created，且明文 access_key 只出现在该事件帧、未落入日志/哈希。"""
     monkeypatch.setenv("HANDOFF_DB_PATH", str(tmp_path / "sse.db"))
     import logging
+
     from api.main import app
 
     records: list[str] = []
@@ -824,22 +824,20 @@ def test_create_rejects_blank_question(tickets_api_client):
 
 def _sse_payloads(text: str) -> list[dict]:
     """解析 SSE 文本，返回各 `data:` 帧的 JSON 载荷（.type/.data 结构）。"""
+    from contextlib import suppress
+
     out: list[dict] = []
     current: list[str] = []
     for line in text.splitlines():
         if line.startswith("data:"):
             current.append(line[5:].strip())
         elif current:
-            try:
+            with suppress(ValueError, TypeError):
                 out.append(json.loads("".join(current)))
-            except (ValueError, TypeError):
-                pass
             current = []
     if current:
-        try:
+        with suppress(ValueError, TypeError):
             out.append(json.loads("".join(current)))
-        except (ValueError, TypeError):
-            pass
     return out
 
 

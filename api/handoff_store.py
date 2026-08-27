@@ -18,7 +18,7 @@ import os
 import secrets
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 # 工单状态机：pending → processing → resolved / closed
@@ -93,7 +93,7 @@ class HandoffStore:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return datetime.now(UTC).isoformat(timespec="seconds")
 
     # ------------------------------------------------------------------ 序列化
 

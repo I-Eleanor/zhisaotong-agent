@@ -29,7 +29,7 @@ from api.admin_session import (
     session_store,
     session_ttl_seconds,
 )
-from api.handoff_store import HandoffStore, HandoffStoreError, VALID_STATUSES
+from api.handoff_store import VALID_STATUSES, HandoffStore, HandoffStoreError
 from api.schemas import AdminLoginRequest, HandoffCreateRequest, HandoffReplyRequest
 from utils import error_codes
 from utils.logger_handler import log_safe_text, logger
@@ -205,7 +205,6 @@ def create_handoff(body: HandoffCreateRequest):
 @router.get("/handoff/{ticket_id}")
 def get_handoff(ticket_id: str, access_key: str | None = Query(default=None)):
     """用户凭 access_key 查询工单；缺失 / 错误 / 不存在统一 404。"""
-    rid = get_request_id()
     store = _get_store()
     if isinstance(store, JSONResponse):
         return store

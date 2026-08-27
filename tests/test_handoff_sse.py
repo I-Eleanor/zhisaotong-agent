@@ -14,7 +14,6 @@ import json
 import time
 
 from agent.events import make_event
-
 from tests.conftest import CannedOrchestrator
 
 
