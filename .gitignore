@@ -85,3 +85,6 @@ data/handoff.db
 data/handoff.db-*
 data/test.txt
 /md5.text
+
+.codex/
+.gh-config/
