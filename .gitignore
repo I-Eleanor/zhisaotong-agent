@@ -79,3 +79,9 @@ node_modules/
 # 临时 / 测试残留（避免被知识库扫描索引或误提交）
 _mvtest_dst/
 data/_kb_test*
+
+# 运行期 / 测试生成物（非项目必需文件）
+data/handoff.db
+data/handoff.db-*
+data/test.txt
+/md5.text

@@ -5,17 +5,30 @@ from pydantic import BaseModel, field_validator
 
 
 class ChatRequest(BaseModel):
-    """对话请求。history 为多轮记忆，mode 可强制 routing，
-    conversation_id 为前端会话内稳定的会话标识（转人工关联也用）。"""
+    """对话请求。history 为多轮记忆（客户端管理，兼容旧格式），mode 可强制 routing，
+    conversation_id 为前端会话内稳定的会话标识（转人工关联也用）。
+
+    会话模式（推荐）：携带 conversation_id 时由服务端会话存储管理历史
+    （request.history 被忽略）；未携带时沿用 request.history 并新建会话。
+    user_id 未传时使用默认演示用户 1001。
+    """
     query: str
     history: list[dict] | None = None
     mode: Literal["conversation", "diagnostic"] | None = None
     conversation_id: str | None = None
+    user_id: str | None = None
 
 
 class DiagnoseRequest(BaseModel):
-    """诊断请求。"""
+    """诊断请求。
+
+    user_id 未传时使用默认演示用户 1001；conversation_id 未传时新建会话，
+    响应（SSE 首个 session 事件）中返回。设备状态与日志来自模拟设备数据
+    （经 MCP Client / Server 工具层查询 CSV / Mock 数据源）。
+    """
     query: str
+    user_id: str | None = None
+    conversation_id: str | None = None
 
 
 class HandoffCreateRequest(BaseModel):

@@ -71,7 +71,11 @@ def test_mcp_fallback_response_whitelist_controls_tool_name():
 
 # ----------------------------------------------------------------- MCP 启动/构造失败安全（P1-12）
 def test_mcp_tool_construction_failure_returns_safe_text(monkeypatch, caplog):
-    """MCP 工具内服务构造失败：客户端只收固定安全文本，异常细节（密钥/路径）不泄漏。"""
+    """MCP 工具内服务构造失败：客户端只收固定安全文本，异常细节（密钥/路径）不泄漏。
+
+    user_id 使用已注册演示用户（1001）——未注册用户会在服务构造前被
+    归属校验拦截（走 unavailable 分支），无法覆盖本场景。
+    """
     import logging
 
     from mcp_server import device_server
@@ -85,7 +89,7 @@ def test_mcp_tool_construction_failure_returns_safe_text(monkeypatch, caplog):
     monkeypatch.setattr(device_server, "create_device_status_service", boom)
 
     with caplog.at_level(logging.ERROR, logger="agent"):
-        result = device_server.query_device_status("123")
+        result = device_server.query_device_status("1001")
 
     assert result == "设备状态数据暂时不可用，请稍后重试。", "应返回固定安全文本"
     for leaked in (secret, abs_path, "RuntimeError", "服务构造失败"):
@@ -104,7 +108,10 @@ def test_mcp_tool_construction_failure_returns_safe_text(monkeypatch, caplog):
 
 
 def test_mcp_log_server_failure_returns_safe_text(monkeypatch, caplog):
-    """log_server 工具失败：客户端只收固定安全文本，异常细节不泄漏。"""
+    """log_server 工具失败：客户端只收固定安全文本，异常细节不泄漏。
+
+    user_id 使用已注册演示用户（1001）——未注册用户会被归属校验先拦截。
+    """
     import logging
 
     from mcp_server import log_server
@@ -117,7 +124,7 @@ def test_mcp_log_server_failure_returns_safe_text(monkeypatch, caplog):
     monkeypatch.setattr(log_server, "create_device_log_service", boom)
 
     with caplog.at_level(logging.ERROR, logger="agent"):
-        result = log_server.query_device_logs("123", days=3)
+        result = log_server.query_device_logs("1001", days=3)
 
     assert result == "设备日志数据暂时不可用，请稍后重试。", "应返回固定安全文本"
     assert secret not in result and "RuntimeError" not in result

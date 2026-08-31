@@ -109,6 +109,23 @@ def mock_models(monkeypatch):
     mf.reset_models()
 
 
+# --------------------------------------------------------------------- 设备数据 Provider
+@pytest.fixture(autouse=True)
+def direct_device_provider(monkeypatch):
+    """单元测试默认注入 direct Provider：设备工具进程内直连 CSV/Mock 服务。
+
+    主链路生产默认是 MCP Provider（stdio 子进程），在专门的 MCP 测试
+    （test_mcp_client.py / test_mcp_e2e.py）中显式覆盖，避免整个测试套件
+    反复拉起子进程。
+    """
+    from agent.tools import diagnostic_tools
+
+    monkeypatch.setenv("DEVICE_DATA_PROVIDER", "direct")
+    diagnostic_tools.reset_device_data_provider()
+    yield
+    diagnostic_tools.reset_device_data_provider()
+
+
 # --------------------------------------------------------------------- 临时向量库
 @pytest.fixture
 def temp_vector_store(tmp_path):

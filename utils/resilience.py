@@ -139,6 +139,7 @@ def mcp_fallback_response(tool_name: str, error: Exception) -> str:
 # ALLOWED_TOOLS）+ MCP server 暴露的工具名；utils 不反向依赖 agent 包，此处显式枚举
 _MCP_FALLBACK_TOOL_WHITELIST = frozenset({
     "query_device_status",
+    "query_device_logs",
     "query_error_code",
     "query_maintenance",
     "retrieve_knowledge",

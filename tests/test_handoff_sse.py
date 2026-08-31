@@ -206,9 +206,11 @@ def test_chat_sync_handoff_response(api_client):
     app.state.container._orchestrator = _HandoffOnlyOrchestrator()
     resp = api_client.post("/api/chat/sync", json={"query": "转人工"})
     assert resp.status_code == 200
-    assert resp.json() == {"answer": "", "need_handoff": True}, (
-        "人工转接应返回 {answer:'', need_handoff:true}"
-    )
+    body = resp.json()
+    assert body["answer"] == "", "转人工场景无文本回答"
+    assert body["need_handoff"] is True
+    assert body["conversation_id"].startswith("conv-"), "新增会话标识字段（旧客户端可忽略）"
+    assert body["user_id"] == "1001", "未传 user_id 时使用默认演示用户"
 
 
 def test_chat_sync_normal_response_unchanged(api_client):
@@ -220,4 +222,8 @@ def test_chat_sync_normal_response_unchanged(api_client):
     body = resp.json()
     assert body["need_handoff"] is False
     assert body["answer"], "普通问答 answer 与原行为一致"
-    assert set(body) == {"answer", "need_handoff"}, "响应结构应为 {answer, need_handoff}"
+    # 原有两字段保持不变，新增会话字段（conversation_id / user_id）
+    assert {"answer", "need_handoff"} <= set(body), "原有响应字段不变"
+    assert set(body) == {"answer", "need_handoff", "conversation_id", "user_id"}, (
+        "新增会话标识字段，旧客户端可忽略"
+    )

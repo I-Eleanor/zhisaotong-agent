@@ -1,6 +1,6 @@
 # 智扫通 - 扫地机器人智能客服系统
 
-> RAG + 多 Agent 协作的扫地机器人专业智能客服。FastAPI + SSE 流式输出，诊断链路采用 Plan-Execute-Replan 编排，MCP Server 接入实时设备数据。
+> RAG + 多 Agent 协作的扫地机器人专业智能客服。FastAPI + SSE 流式输出，诊断链路采用 Plan-Execute-Replan 编排，通过 MCP Client/Server 工具层访问**模拟设备状态与运行日志数据**（底层为 CSV/Mock 数据源，模拟真实设备平台）。
 
 **89 测试用例 · 覆盖率 ≥70% · CI 自动化 · Docker 一键部署**
 
@@ -23,7 +23,8 @@
 - **设备诊断** — Plan-Execute-Replan 编排，自动生成排查计划、调用工具、产出诊断报告
 - **个性化报告** — 根据用户使用数据，生成使用情况报告与保养建议
 - **多轮记忆** — 分层 ConversationBuffer，超出阈值自动摘要压缩
-- **MCP 实时接入** — 通过 MCP Server（stdio）接入设备状态与运行日志
+- **MCP 工具层** — 诊断工具经 MCP Client（stdio 子进程）调用 device_server / log_server，服务端再查 CSV / Mock 模拟数据
+- **轻量会话** — 演示用户（user_id）+ 会话（conversation_id），服务端内存存储，支持多轮上下文与归属校验
 - **流式输出** — FastAPI + SSE 流式推送 AgentEvent，前端实时渲染
 
 ---
@@ -54,19 +55,29 @@
 │   ConversationAgent        │         │   DiagnosticAgent（Plan-Execute-Replan）│
 │   （ReAct，多轮记忆）       │         │   planner → executor → replanner → reporter │
 │   └─ KnowledgeAgent        │         └───────────────┬──────────────────────┘
-│      （RAG 总结）          │                          │ 工具调用
+│      （RAG 总结）          │                          │ 工具调用（ToolRouter）
 └───────────┬───────────────┘                          │
+            │                                          ▼
+            │                          ┌──────────────────────────────────────┐
+            │                          │  MCP Client（stdio 子进程适配层）      │
+            │                          │  DeviceMcpClient / LogMcpClient      │
+            │                          └───────────────┬──────────────────────┘
+            │                                          │ stdio
             │                                          ▼
             │                          ┌──────────────────────────────────────┐
             │                          │  MCP Server（stdio）                  │
             │                          │  • device_server：设备状态/耗材/效率   │
             │                          │  • log_server：运行日志               │
+            │                          └───────────────┬──────────────────────┘
+            │                                          ▼
+            │                          ┌──────────────────────────────────────┐
+            │                          │  模拟设备数据（CSV / Mock Repository） │
             │                          └──────────────────────────────────────┘
             ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │                           模型 / 存储层                                │
 │  LLM：DeepSeek（OpenAI 兼容） ｜ Embedding：本地 Sentence-Transformers │
-│  ChromaDB（向量知识库 + CrossEncoder 重排） ｜ 设备数据 CSV ｜ 知识库文档  │
+│  ChromaDB（向量知识库 + CrossEncoder 重排） ｜ 会话存储（内存）          │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,6 +91,8 @@
 |------|------|------|
 | Agent 编排 | LangGraph StateGraph | Plan-Execute-Replan 循环需要状态机，LangGraph 原生支持 |
 | SSE 桥接 | ThreadPoolExecutor + asyncio.Queue | LangChain Agent 为同步生成器，桥接为异步 SSE 无需改造核心代码 |
+| 设备数据来源 | MCP Client/Server（stdio） | 诊断数据与 Agent 逻辑解耦，主链路经 MCP 子进程访问 CSV/Mock 模拟数据 |
+| MCP 生命周期 | 每次调用独立子进程 | 演示级刻意取舍：无状态、无长连接、无重连状态机，用完即关闭；代价是每次调用有进程启动开销 |
 | 意图路由 | 关键词优先 + LLM 兜底 | 关键词命中零延迟，LLM 兜底保证召回，兼顾速度与准确率 |
 | Embedding | 本地 Sentence-Transformers | 避免网络依赖和 API 费用，离线可用 |
 | 重排 | CrossEncoder Reranker | 向量召回后精排，提升 Top-K 相关性 |
@@ -311,7 +324,8 @@ Agent_project/
 
 - Embedding 和 Reranker 模型路径硬编码在 `config/rag.yml` / `config/chroma.yml`，跨机器部署需手动修改
 - MCP Server 仅支持 stdio 传输，不支持远程 MCP
-- 多用户会话隔离尚未实现，当前为单用户演示
+- 会话存储为**单进程内存**实现，服务重启后失效（轻量演示级，非持久化）
+- **当前项目不包含真实设备联网、IoT 网关和云平台接入**；设备状态与运行日志为可复现的模拟数据（CSV / Mock 数据源）
 - 评测结果尚未运行，`eval/results/` 为空
 
 ---
@@ -320,7 +334,7 @@ Agent_project/
 
 - [ ] 接入更多 LLM 后端（OpenAI、通义等）
 - [ ] 用户反馈 / 评价机制
-- [ ] 前端鉴权与多用户会话隔离
+- [ ] 前端鉴权与会话持久化（当前为内存会话 + 演示用户）
 - [ ] Embedding 模型路径配置化（支持环境变量或自动下载）
 - [ ] 运行 RAG 评测并记录基线数据
 - [ ] Prometheus 指标导出（`/metrics`）

@@ -4,6 +4,7 @@
 上层（React 前端 / FastAPI SSE）只需要按 type 分支渲染，无需感知 Agent 内部实现。
 
 事件类型：
+    session     会话信息（SSE 首个事件：conversation_id / user_id）
     route       编排层完成意图路由
     thinking    Agent 调用工具前的思考过程（浅色显示，最终回答前消失）
     message     Agent 产出的最终自然语言回答
@@ -29,6 +30,7 @@ class AgentEvent(TypedDict, total=False):
     data: dict[str, Any]
 
 
+EVENT_TYPE_SESSION: str = "session"
 EVENT_TYPE_ROUTE: str = "route"
 EVENT_TYPE_THINKING: str = "thinking"
 EVENT_TYPE_MESSAGE: str = "message"
@@ -45,7 +47,8 @@ EVENT_TYPE_HANDOFF_CREATED: str = "handoff_created"
 EVENT_TYPE_HANDOFF_HUMAN_SERVICE: str = "handoff_human_service"
 
 VALID_EVENT_TYPES: frozenset[str] = frozenset({
-    EVENT_TYPE_ROUTE, EVENT_TYPE_THINKING, EVENT_TYPE_MESSAGE, EVENT_TYPE_TOOL_START, EVENT_TYPE_TOOL_END,
+    EVENT_TYPE_SESSION, EVENT_TYPE_ROUTE, EVENT_TYPE_THINKING, EVENT_TYPE_MESSAGE,
+    EVENT_TYPE_TOOL_START, EVENT_TYPE_TOOL_END,
     EVENT_TYPE_PLAN, EVENT_TYPE_STEP, EVENT_TYPE_REPLAN, EVENT_TYPE_REPORT,
     EVENT_TYPE_ERROR, EVENT_TYPE_DONE,
     EVENT_TYPE_HANDOFF_SUGGESTED, EVENT_TYPE_HANDOFF_CREATED, EVENT_TYPE_HANDOFF_HUMAN_SERVICE,
@@ -55,6 +58,11 @@ VALID_EVENT_TYPES: frozenset[str] = frozenset({
 # 转人工事件族（suggested → created → human_service）必须按序透传；error / done 属于必达的
 # 结束类事件，同样纳入——转人工流程全走无界控制队列，严格 FIFO，
 # 不会因"业务队列优先排空"而被提前输出或丢失。
+#
+# session 事件（携带 conversation_id）刻意不在此列：控制队列与业务队列是两个通道，
+# 消费端优先排空业务队列，若 session 走控制通道会被后到的业务事件抢先输出，
+# 破坏"SSE 首个事件返回会话标识"的约定。它是生产线程产出的第一个事件，
+# 走业务队列即可保证首达且不可能被丢弃（队列满只可能发生在大量事件之后）。
 NON_DROPPABLE_EVENT_TYPES: frozenset[str] = frozenset({
     EVENT_TYPE_HANDOFF_SUGGESTED, EVENT_TYPE_HANDOFF_CREATED, EVENT_TYPE_HANDOFF_HUMAN_SERVICE,
     EVENT_TYPE_ERROR, EVENT_TYPE_DONE,
@@ -76,6 +84,9 @@ def event_to_text(event: AgentEvent) -> str:
 
     if event_type in (EVENT_TYPE_MESSAGE, EVENT_TYPE_REPORT):
         return content
+
+    if event_type == EVENT_TYPE_SESSION:
+        return f"[会话] {data.get('conversation_id', '')}\n"
 
     if event_type == EVENT_TYPE_THINKING:
         return f"[思考] {content}\n"

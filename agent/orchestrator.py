@@ -183,7 +183,8 @@ class Orchestrator:
         logger.info({"event": "orchestrator_execute", "mode": effective_mode, "query": log_safe_text(user_query)})
 
         if effective_mode == MODE_DIAGNOSTIC:
-            yield from self.diagnostic_agent.run(user_query)
+            # 会话历史作为诊断上下文（规划/报告参考此前对话；设备数据仍实时查询）
+            yield from self.diagnostic_agent.run(user_query, history)
         else:
             yield from self.conversation_agent.stream(user_query, history)
 
@@ -279,7 +280,8 @@ class Orchestrator:
         """从 history 中提取会话标识：优先取首条 user 消息（弱会话关联）。"""
         for message in history or []:
             if isinstance(message, dict) and message.get("role") == "user":
-                return message.get("content", "")[:64]
+                content = message.get("content", "")
+                return content[:64] if isinstance(content, str) else None
         return None
 
     @staticmethod

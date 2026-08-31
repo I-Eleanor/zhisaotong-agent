@@ -40,9 +40,14 @@ class ChatModelLike(Protocol):
 
 
 class DiagnosticState(TypedDict):
-    """诊断流程状态（LangGraph 状态模式：TypedDict，替换语义 channel）。"""
+    """诊断流程状态（LangGraph 状态模式：TypedDict，替换语义 channel）。
+
+    history：同一会话此前的对话消息（[{role, content}]，仅上下文用途，
+    设备数据仍由工具实时查询）。
+    """
 
     user_query: str
+    history: list[dict]
     pending_steps: list[DiagnosticStep]
     completed_steps: list[CompletedStep]
     iteration_count: int
@@ -51,10 +56,14 @@ class DiagnosticState(TypedDict):
     events: list[AgentEvent]
 
 
-def initial_state(user_query: str) -> dict:
+def initial_state(user_query: str, history: list[dict] | None = None) -> dict:
     """构造初始状态。"""
     return {
         "user_query": user_query,
+        "history": [
+            m for m in (history or [])
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+        ],
         "pending_steps": [],
         "completed_steps": [],
         "iteration_count": 0,
@@ -64,10 +73,23 @@ def initial_state(user_query: str) -> dict:
     }
 
 
+def _format_history(history: list[dict]) -> str:
+    """把会话历史压缩为 planner / reporter 可读的上下文文本。"""
+    lines = []
+    for message in history or []:
+        role = message.get("role", "")
+        content = str(message.get("content", "")).strip()
+        if content and role in ("user", "assistant"):
+            label = "用户" if role == "user" else "助手"
+            lines.append(f"{label}：{content}")
+    return "\n".join(lines)
+
+
 def _fallback_plan(user_query: str) -> DiagnosticPlan:
     """LLM 计划不可用时的固定兜底计划，保证流程不中断。"""
     return DiagnosticPlan(steps=[
         DiagnosticStep(description="查询设备运行状态", tool="query_device_status", arguments={}),
+        DiagnosticStep(description="查询最近运行日志", tool="query_device_logs", arguments={"days": "7"}),
         DiagnosticStep(description="检索故障排除相关资料", tool="retrieve_knowledge", arguments={}),
         DiagnosticStep(description="检索维护保养建议", tool="query_maintenance", arguments={}),
     ])
@@ -101,10 +123,12 @@ def _dedupe_steps(steps: list[DiagnosticStep], completed: list[CompletedStep]) -
 def planner_node(state: dict, parser: LlmParser | None = None) -> dict:
     """根据故障描述生成结构化排查计划；LLM 不可用/输出非法时使用固定兜底计划。"""
     query = state["user_query"]
+    history_text = _format_history(state.get("history", []))
     p = parser if parser is not None else LlmParser()
+    context_block = f"此前对话历史：\n{history_text}\n\n" if history_text else ""
     plan = p.parse_plan(
         load_diagnostic_plan_prompt(),
-        f"用户故障描述：\n{query}\n\n请生成本次排查计划（JSON，最多 {MAX_STEPS} 个步骤）。",
+        f"{context_block}用户故障描述：\n{query}\n\n请生成本次排查计划（JSON，最多 {MAX_STEPS} 个步骤）。",
     )
     if plan is None or not plan.steps:
         logger.warning({"event": "planner_fallback", "query": log_safe_text(query)})
@@ -302,9 +326,11 @@ def reporter_node(state: dict, model: ChatModelLike | None = None) -> dict:
     都降级为 _fallback_report，保证最终事件流一定包含一个 report。
     """
     query = state["user_query"]
+    history_text = _format_history(state.get("history", []))
     completed = list(state.get("completed_steps", []))
+    history_block = f"此前对话历史：\n{history_text}\n\n" if history_text else ""
     user_prompt = (
-        f"用户故障描述：\n{query}\n\n"
+        f"{history_block}用户故障描述：\n{query}\n\n"
         f"排查过程与结果：\n{_format_completed(completed) or '（无具体执行结果）'}\n\n"
         f"请按模板生成 Markdown 诊断报告。"
     )

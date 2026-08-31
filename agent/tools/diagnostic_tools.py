@@ -1,8 +1,12 @@
 """诊断 Agent 专用工具。
 
 与对话 Agent 的 agent_tools.py 保持一致：统一用 _safe_call 包装异常。
-所有重型依赖（知识库 Agent、设备状态服务）均懒加载，导入本模块不会触发
-Embedding 模型或向量库的初始化。
+所有重型依赖（知识库 Agent、设备数据 Provider）均懒加载，导入本模块不会触发
+Embedding 模型、向量库的初始化或 MCP 子进程启动。
+
+设备状态 / 日志工具不再直连 CsvDeviceStatusService / MockDeviceLogService，
+而是统一经 DeviceDataProvider 抽象（默认 MCP Provider，经 stdio 子进程
+调用 device_server / log_server；可配置 DEVICE_DATA_PROVIDER=direct 直连）。
 """
 from collections.abc import Callable
 
@@ -38,24 +42,26 @@ def _safe_call(tool_name: str, func: Callable[..., str], *args: object, **kwargs
 
 # ----------------------------------------------------------- 懒加载单例
 
-_status_service = None
-_user_id_service = None
+_device_data_provider = None
 
 
-def _get_device_status_service():
-    global _status_service
-    if _status_service is None:
-        from agent.services import create_device_status_service
-        _status_service = create_device_status_service("csv")
-    return _status_service
+def _get_device_data_provider():
+    """设备数据 Provider 懒加载单例；默认经 MCP Client 调用 MCP Server。
+
+    模式由环境变量 DEVICE_DATA_PROVIDER 控制（mcp 默认 / direct），
+    单元测试可通过 reset_device_data_provider() + 环境变量注入 direct 实现。
+    """
+    global _device_data_provider
+    if _device_data_provider is None:
+        from agent.services.device_data_provider import create_device_data_provider
+        _device_data_provider = create_device_data_provider()
+    return _device_data_provider
 
 
-def _get_user_id_service():
-    global _user_id_service
-    if _user_id_service is None:
-        from agent.services import create_user_id_service
-        _user_id_service = create_user_id_service("mock")
-    return _user_id_service
+def reset_device_data_provider() -> None:
+    """重置 Provider 单例（配置变更 / 测试隔离用）。"""
+    global _device_data_provider
+    _device_data_provider = None
 
 
 # ----------------------------------------------------------- 原始调用（异常上抛）
@@ -85,8 +91,22 @@ def build_raw_knowledge_tools(knowledge_agent=None):
 
 
 def raw_query_device_status(user_id: str) -> str:
-    """查询设备运行状态；异常直接抛出，供 ToolRouter 区分成功/失败。"""
-    return str(_get_device_status_service().get_status(user_id))
+    """查询设备运行状态；异常直接抛出，供 ToolRouter 区分成功/失败。
+
+    执行链路（默认）：Provider(MCP) → stdio device_server → CSV 状态服务。
+    """
+    return str(_get_device_data_provider().query_status(user_id))
+
+
+def raw_query_device_logs(user_id: str, days: int | str = 7) -> str:
+    """查询设备运行日志；异常直接抛出，供 ToolRouter 区分成功/失败。
+
+    days 由调用方归一化到 1-30；执行链路（默认）：
+    Provider(MCP) → stdio log_server → Mock 日志服务。
+    """
+    from agent.mcp_client.log_client import normalize_days
+
+    return str(_get_device_data_provider().query_logs(user_id, normalize_days(days)))
 
 
 def raw_query_error_code(error_code: str) -> str:
@@ -111,6 +131,11 @@ def query_device_status(user_id: str) -> str:
     return _safe_call("query_device_status", raw_query_device_status, user_id)
 
 
+@tool(description="查询指定用户设备最近 days 天的运行日志（含错误码、告警、运行时长），入参为 user_id（数字字符串）与 days（1-30，默认 7）")
+def query_device_logs(user_id: str, days: int = 7) -> str:
+    return _safe_call("query_device_logs", raw_query_device_logs, user_id, days)
+
+
 @tool(description="根据错误码查询知识库故障排除手册，获取故障说明与处理建议，入参为 error_code（如 E01）")
 def query_error_code(error_code: str) -> str:
     return _safe_call("query_error_code", raw_query_error_code, error_code)
@@ -127,5 +152,12 @@ def retrieve_knowledge(query: str) -> str:
 
 
 def current_user_id() -> str:
-    """诊断 Agent 执行设备状态类步骤时，自动获取当前用户 ID（mock 环境）。"""
-    return str(_get_user_id_service().get_user_id())
+    """诊断 Agent 执行设备类步骤时，自动获取当前用户 ID。
+
+    优先取请求上下文中的 user_id（API 层写入，未传时为默认演示用户 1001）；
+    不再随机生成，保证同一会话内设备归属稳定。
+    """
+    from agent.services.device_registry import DEFAULT_DEMO_USER_ID
+    from utils.request_context import get_request_user_id
+
+    return get_request_user_id() or DEFAULT_DEMO_USER_ID

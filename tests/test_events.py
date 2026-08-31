@@ -95,7 +95,16 @@ def test_valid_event_types():
     assert "handoff_suggested" in VALID_EVENT_TYPES
     assert "handoff_created" in VALID_EVENT_TYPES
     assert "handoff_human_service" in VALID_EVENT_TYPES
-    assert len(VALID_EVENT_TYPES) == 14
+    # session：SSE 首个事件，携带 conversation_id / user_id
+    assert "session" in VALID_EVENT_TYPES
+    assert len(VALID_EVENT_TYPES) == 15
+
+
+def test_event_to_text_session_renders_conversation_id():
+    text = event_to_text({
+        "type": "session", "content": "", "data": {"conversation_id": "conv-1", "user_id": "1001"},
+    })
+    assert "[会话]" in text and "conv-1" in text
 
 
 def test_event_to_text_handoff_suggested():

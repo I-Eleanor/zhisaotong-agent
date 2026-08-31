@@ -2,8 +2,12 @@
 
 - 只有 ALLOWED_TOOLS 内的工具会被执行，其余返回 TOOL_UNAVAILABLE；
 - 必填参数缺失时尝试从上下文补全（如 user_id 自动取当前用户、query 兜底为用户原始问题）；
+- 可选参数（如 query_device_logs 的 days）白名单内放行，未知参数一律丢弃；
 - 调用异常一律转为 StepResult(success=False)，携带 error_code 与 safe_error_message，
-  原始异常只进日志，不得伪装成正常诊断结果。
+  原始异常只进日志，不得伪装成正常诊断结果；
+- MCP 连接 / 工具 / 超时失败（MCPConnectionError 族）统一映射 TOOL_UNAVAILABLE，
+  用户只看到固定安全文案（实时设备数据暂时不可用），不泄漏子进程命令、
+  路径或异常原文。
 """
 import re
 from collections.abc import Callable
@@ -12,7 +16,7 @@ from dataclasses import dataclass, field
 from agent.diagnostic.schemas import ALLOWED_TOOLS, DiagnosticStep, StepResult
 from agent.tools.diagnostic_tools import current_user_id
 from utils import error_codes
-from utils.exceptions import ServiceUnavailableError
+from utils.exceptions import MCPConnectionError, ServiceUnavailableError
 from utils.logger_handler import log_safe_value, logger, safe_exception_fields
 
 RawTool = Callable[..., str]
@@ -35,18 +39,26 @@ def _fill_query(user_query: str) -> str | None:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """单个工具的调用规格：函数、必填参数、缺失参数补全规则。"""
+    """单个工具的调用规格：函数、必填参数、缺失参数补全规则、可选参数。"""
 
     func: RawTool
     required: tuple[str, ...]
     auto_fill: dict[str, Callable[[str], str | None]] = field(default_factory=dict)
+    # 可选参数白名单：只放行此处声明的名字（如 query_device_logs 的 days），
+    # 值原样透传（类型归一化由工具函数自身负责），其余未知参数一律丢弃。
+    optional: tuple[str, ...] = ()
 
 
 def build_default_tool_specs(knowledge_agent=None) -> dict[str, ToolSpec]:
     """构造默认工具规格；knowledge_agent 可注入（应用容器管理的知识库 Agent），
-    未注入时知识类工具回退全局懒加载单例。"""
+    未注入时知识类工具回退全局懒加载单例。
+
+    query_device_status / query_device_logs 经 DeviceDataProvider 执行
+    （默认 MCP Provider：ToolRouter → MCP Client → MCP Server → CSV/Mock）。
+    """
     from agent.tools.diagnostic_tools import (
         build_raw_knowledge_tools,
+        raw_query_device_logs,
         raw_query_device_status,
     )
 
@@ -57,6 +69,12 @@ def build_default_tool_specs(knowledge_agent=None) -> dict[str, ToolSpec]:
             func=raw_query_device_status,
             required=("user_id",),
             auto_fill={"user_id": _fill_user_id},
+        ),
+        "query_device_logs": ToolSpec(
+            func=raw_query_device_logs,
+            required=("user_id",),
+            auto_fill={"user_id": _fill_user_id},
+            optional=("days",),
         ),
         "query_error_code": ToolSpec(
             func=raw_error_code,
@@ -116,6 +134,25 @@ class ToolRouter:
 
         try:
             content = spec.func(**args)
+        except MCPConnectionError as e:
+            # MCP 连接 / 工具调用 / 超时失败：统一安全降级，不泄漏子进程命令、
+            # 路径或异常原文（原始异常只进脱敏日志）
+            logger.warning({
+                "event": "tool_router_mcp_unavailable",
+                "tool": step.tool,
+                "args": log_safe_value(args),
+                "stage": e.stage,
+                "error_code": e.error_code,
+                **safe_exception_fields(e),
+            })
+            return StepResult(
+                success=False,
+                error_code=error_codes.TOOL_UNAVAILABLE,
+                safe_error_message=(
+                    f"步骤「{step.description}」的实时设备数据暂时不可用，"
+                    "本步骤已跳过，后续建议将基于已有知识生成。"
+                ),
+            )
         except ServiceUnavailableError as e:
             # 底层服务明确报告不可用（项目异常）：转为失败步骤，绝不把
             # 错误字符串当成成功结果写入已确认事实。
@@ -153,12 +190,19 @@ class ToolRouter:
         return StepResult(success=True, content=str(content))
 
     def _resolve_arguments(self, step: DiagnosticStep, spec: ToolSpec, user_query: str) -> dict[str, str]:
-        """取交集参数并按补全规则填充缺失的必填参数。"""
+        """取必填交集 + 可选白名单参数，并按补全规则填充缺失的必填参数。
+
+        - 必填参数：只接受规格内声明的名字且值非空；
+        - 可选参数：只接受规格 optional 白名单内的名字且值非空（如 days），
+          值以字符串形式透传，类型归一化由工具函数自身负责；
+        - 其余未知参数一律丢弃并记警告。
+        """
+        known_optional = set(spec.optional)
         args: dict[str, str] = {}
         for name, value in step.arguments.items():
-            if name in spec.required and value:
+            if name in spec.required and value or name in known_optional and value not in (None, ""):
                 args[name] = str(value)
-            elif name not in spec.required:
+            else:
                 logger.warning({
                     "event": "tool_router_unknown_arg_dropped",
                     "tool": step.tool,

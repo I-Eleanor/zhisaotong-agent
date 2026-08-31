@@ -5,15 +5,16 @@
 
 # 可用工具（tool 字段只能取以下白名单中的名称）
 - query_device_status：查询设备运行状态（覆盖率、清洁效率、耗材状态等），必填参数 user_id（可留空，执行时会自动补全当前用户）
+- query_device_logs：查询设备最近 N 天的运行日志（含错误码、告警、回充失败等事件），参数 user_id（可留空，自动补全）、days（可选，1-30 的整数，默认 7）
 - query_error_code：根据错误码查询故障排除手册，必填参数 error_code（如 E01；可留空，执行时会尝试从用户描述中提取）
 - query_maintenance：查询维护保养建议（限定维护保养手册），必填参数 query（维护相关检索词）
 - retrieve_knowledge：全库知识检索，必填参数 query（检索词，可用用户故障描述）
 
 # 输出要求
 1. 仅输出一个 JSON 对象，格式如下：
-{"steps": [{"description": "查询设备运行状态", "tool": "query_device_status", "arguments": {}}, {"description": "检索维护保养建议", "tool": "query_maintenance", "arguments": {"query": "清洁效率低 维护"}}]}
+{"steps": [{"description": "查询设备运行状态", "tool": "query_device_status", "arguments": {}}, {"description": "查询最近运行日志", "tool": "query_device_logs", "arguments": {"days": 7}}, {"description": "检索维护保养建议", "tool": "query_maintenance", "arguments": {"query": "清洁效率低 维护"}}]}
 2. steps 数组最多 5 个元素，按排查优先级从高到低排列
 3. 每一步的 description 用一句话清晰描述"要排查什么"
-4. tool 必须从上面的白名单中选择，arguments 只包含该工具的必填参数（值均为字符串；不确定时可留空对象）
-5. 优先覆盖：设备状态 → 错误码/故障手册 → 维护保养建议 这条主线
+4. tool 必须从上面的白名单中选择，arguments 只包含该工具声明的参数（值均为字符串；不确定时可留空对象；days 必须在 1 到 30 之间）
+5. 优先覆盖：设备状态 → 运行日志 → 错误码/故障手册 → 维护保养建议 这条主线；涉及"最近、频繁、偶发"等时间性描述时优先查日志
 6. 不要输出任何解释性文字，只输出 JSON 对象本身

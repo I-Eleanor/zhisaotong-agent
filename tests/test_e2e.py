@@ -34,7 +34,7 @@ def test_e2e_diagnostic_route_and_report(api_client):
     events_log = []
 
     class TrackingOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             def gen():
                 yield {"type": "route", "agent": "orchestrator", "content": "", "data": {"mode": "diagnostic", "mode_label": "设备诊断"}}
                 events_log.append("route_diagnostic")

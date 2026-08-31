@@ -12,8 +12,10 @@ from uuid import uuid4
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 # 工具白名单：诊断步骤只允许调用这些工具
+# （query_device_logs 与 query_device_status 一样默认经 MCP Client 执行）
 ALLOWED_TOOLS: tuple[str, ...] = (
     "query_device_status",
+    "query_device_logs",
     "query_error_code",
     "query_maintenance",
     "retrieve_knowledge",

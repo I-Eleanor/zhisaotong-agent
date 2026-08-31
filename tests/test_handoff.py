@@ -71,7 +71,7 @@ class _EchoConversationAgent:
 
 
 class _EchoDiagnosticAgent:
-    def run(self, query):
+    def run(self, query, history=None):
         yield {"type": "report", "agent": "diagnostic", "content": f"report:{query}"}
         yield {"type": "done", "agent": "diagnostic"}
 

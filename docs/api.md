@@ -12,12 +12,15 @@
 
 ```json
 {
-  "type": "message | tool_start | tool_end | plan | step | replan | report | error | done",
-  "agent": "conversation | diagnostic | knowledge",
+  "type": "session | message | tool_start | tool_end | plan | step | replan | report | error | done",
+  "agent": "conversation | diagnostic | knowledge | orchestrator",
   "content": "文本/Markdown 内容",
-  "data": { "tool": "...", "args": {}, "...": "..." }
+  "data": { "tool": "...", "args": {}, "conversation_id": "...", "user_id": "...", "...": "..." }
 }
 ```
+
+> 流式响应的**首个事件固定为 `session`**，`data` 携带 `conversation_id` 与
+> `user_id`，前端保存后可在后续请求中回传以延续多轮上下文。
 
 ### SSE 格式
 
@@ -66,17 +69,25 @@ data: {"type": "done", "agent": "conversation", "content": ""}
     {"role": "user", "content": "上次的滤网"},
     {"role": "assistant", "content": "用软布擦拭即可"}
   ],
-  "mode": "conversation"   // 可选，强制路由："conversation" | "diagnostic"
+  "mode": "conversation",   // 可选，强制路由："conversation" | "diagnostic"
+  "user_id": "1001",        // 可选，演示用户；未传时使用默认演示用户 1001
+  "conversation_id": "conv-xxx"  // 可选，会话标识；未传时服务端新建会话
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `query` | string | 本轮用户提问（必填） |
-| `history` | list[dict] \| null | 多轮记忆，每条含 `role` 与 `content` |
+| `history` | list[dict] \| null | 多轮记忆，每条含 `role` 与 `content`（未携带 `conversation_id` 时使用） |
 | `mode` | string \| null | 强制路由；不填则由 Orchestrator 自动判断 |
+| `user_id` | string \| null | 演示用户标识；未传时使用默认演示用户 `1001`（不再随机生成） |
+| `conversation_id` | string \| null | 会话标识；未传时服务端新建并在响应中返回；归属其他用户时返回 403 |
 
-**响应**：`text/event-stream`，逐事件推送 `AgentEvent`（`tool_start` / `message` / `done` 等）。
+**响应**：`text/event-stream`，首个事件为 `session`（`conversation_id` / `user_id`），
+随后逐事件推送 `AgentEvent`（`tool_start` / `message` / `done` 等）。
+
+> 携带 `conversation_id` 时，历史以**服务端会话**为准（`history` 被忽略）；
+> 未携带时沿用客户端 `history`（旧客户端格式完全兼容），并自动新建会话。
 
 ---
 
@@ -88,22 +99,41 @@ data: {"type": "done", "agent": "conversation", "content": ""}
 
 ```json
 {
-  "query": "最近清洁效率很低，而且经常报告边刷被卡住"
+  "query": "最近清洁效率很低，而且经常报告边刷被卡住",
+  "user_id": "1001",           // 可选，演示用户；未传时使用默认演示用户 1001
+  "conversation_id": "conv-xxx"  // 可选，会话标识；未传时服务端新建会话
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `query` | string | 故障描述（必填） |
+| `user_id` | string \| null | 演示用户标识；未传时使用默认演示用户 `1001` |
+| `conversation_id` | string \| null | 会话标识；未传时新建；归属其他用户时返回 403 |
 
-**响应**：`text/event-stream`，依次推送：
+**响应**：`text/event-stream`，首个事件为 `session`（`conversation_id` / `user_id`），依次推送：
 - `plan`：排查计划（步骤列表）
 - `step`：每一步执行结果与所调用的工具
 - `replan`：continue / replan / end 决策
 - `report`：最终 Markdown 诊断报告
 - `done`：结束事件
 
-诊断链路会经 MCP Server 查询真实设备状态与运行日志。
+诊断链路经 MCP Client/Server 工具层查询**模拟设备状态与运行日志**（底层为
+CSV / Mock 数据源）。设备类工具失败时，报告中标记为「实时设备数据不可用」，
+建议基于已有知识生成；不会向客户端泄漏内部异常、路径或密钥。
+
+---
+
+## 3.1 会话与身份（轻量演示级）
+
+- **演示用户**：`user_id` 取值 `1001`-`1010`，映射到各自的模拟设备
+  （见 `agent/services/device_registry.py`）；未传时使用默认演示用户 `1001`，
+  不再随机生成（保证同一用户多次请求落到同一设备）。
+- **会话**：`conversation_id` 由服务端生成，保存 `{user_id, messages, created_at, updated_at}`，
+  仅保存对话上下文，不保存真实设备状态（设备状态仍由 MCP 工具实时查询）。
+- **归属校验**：每次请求校验 `conversation_id` 是否属于当前 `user_id`；
+  不归属返回 `403` + `CONVERSATION_ACCESS_DENIED`（不确认会话是否存在）。
+- **存储**：当前为**单进程内存**实现，服务重启后会话失效（演示级，不引入数据库）。
 
 ---
 
@@ -313,15 +343,15 @@ Set-Cookie: admin_session=<sid>; HttpOnly; Secure; SameSite=lax; Max-Age=<ttl>; 
 # 健康检查
 curl http://localhost:8000/api/health
 
-# 对话（SSE）
+# 对话（SSE，携带演示用户与会话标识延续多轮上下文）
 curl -N -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"query":"怎么清理滤网？"}'
+  -d '{"query":"怎么清理滤网？","user_id":"1001","conversation_id":"conv-xxx"}'
 
-# 诊断（SSE）
+# 诊断（SSE，首个事件为 session，返回 conversation_id）
 curl -N -X POST http://localhost:8000/api/diagnose \
   -H "Content-Type: application/json" \
-  -d '{"query":"清洁效率很低"}'
+  -d '{"query":"清洁效率很低","user_id":"1001"}'
 
 # 上传知识文档（Windows 请用绝对路径，避免 /tmp 风格路径导致读取失败）
 curl -X POST http://localhost:8000/api/knowledge/upload \

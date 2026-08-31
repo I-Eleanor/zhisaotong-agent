@@ -87,7 +87,9 @@ class HandoffStore:
     # ------------------------------------------------------------------ 连接
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        db_path = self.db_path
+        assert db_path is not None  # __init__ 已校验 HANDOFF_DB_PATH 非空
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -218,7 +220,9 @@ class HandoffStore:
                 )
         except sqlite3.Error as e:
             raise HandoffStoreError(f"创建工单失败：{type(e).__name__}") from e
-        return self._row_to_ticket(stored), access_key
+        ticket = self._row_to_ticket(stored)
+        assert ticket is not None  # stored 为字典，_row_to_ticket 必然返回字典
+        return ticket, access_key
 
     def reply(self, ticket_id: str, human_reply: str, status: str = STATUS_RESOLVED) -> dict | None:
         """追加一条人工回复并更新状态；空回复仅更新状态（用于结束工单而不追加）。

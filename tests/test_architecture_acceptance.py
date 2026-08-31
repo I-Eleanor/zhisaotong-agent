@@ -246,7 +246,7 @@ def test_sse_error_and_done_protocol_unchanged(api_client, monkeypatch):
     from api.main import app
 
     class ExplodingOrchestrator:
-        def execute(self, query, history=None, mode=None):
+        def execute(self, query, history=None, mode=None, conversation_id=None):
             raise RuntimeError("模型崩溃：sk-secret-999 与 D:\\model\\weights")
             yield  # pragma: no cover - 使 execute 成为生成器函数
 

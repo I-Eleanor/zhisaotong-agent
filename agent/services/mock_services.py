@@ -32,9 +32,17 @@ class MockLocationService(LocationService):
 
 
 class MockUserIdService(UserIdService):
+    """演示用户 ID 服务：请求上下文中的用户优先，否则返回固定演示用户。
+
+    不再随机生成用户 ID——随机会导致同一用户的多次请求落到不同设备，
+    破坏会话连续性；未携带 user_id 的旧请求统一回退默认演示用户 1001。
+    """
+
     def get_user_id(self) -> str:
-        user_id = random.choice(["1001", "1002", "1003", "1004", "1005",
-                                  "1006", "1007", "1008", "1009", "1010"])
+        from agent.services.device_registry import DEFAULT_DEMO_USER_ID
+        from utils.request_context import get_request_user_id
+
+        user_id = get_request_user_id() or DEFAULT_DEMO_USER_ID
         logger.info({"event": "mock_user_id", "user_id": user_id})
         return user_id
 

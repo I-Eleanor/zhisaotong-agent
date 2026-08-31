@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
     from agent.orchestrator import Orchestrator
+    from agent.services.session_store import ConversationSessionStore
     from rag.rag_service import RagSummarizeService
     from rag.vector_store import VectorStoreService
 
@@ -80,6 +81,7 @@ class AppContainer:
         self._vector_store: VectorStoreService | None = None
         self._rag_service: RagSummarizeService | None = None
         self._orchestrator: Orchestrator | None = None
+        self._session_store: ConversationSessionStore | None = None
         self._state = ContainerState.OPEN
 
     # ------------------------------------------- 懒加载资源（双检锁，线程安全）
@@ -146,6 +148,18 @@ class AppContainer:
                     self._orchestrator = self._build_orchestrator()
                     self._state = ContainerState.OPEN
         return self._orchestrator
+
+    @property
+    def session_store(self) -> ConversationSessionStore:
+        """轻量对话会话存储（内存实现，无重型资源；懒创建 + 双检锁）。"""
+        if self._session_store is None:
+            with self._lock:
+                if self._state is ContainerState.CLOSING:
+                    raise ContainerStateError(_CLOSING_ACCESS_MSG)
+                if self._session_store is None:
+                    from agent.services.session_store import ConversationSessionStore
+                    self._session_store = ConversationSessionStore()
+        return self._session_store
 
     def _build_orchestrator(self) -> Orchestrator:
         """用容器管理的依赖组装 Orchestrator：模型、RAG、知识工具全部注入。"""
@@ -231,6 +245,9 @@ class AppContainer:
             self._vector_store = None
             self._embedding_model = None
             self._chat_model = None
+            # 会话存储为纯内存对象（无 close()），仅清空引用保持
+            # "CLOSING/CLOSED 时引用必为 None" 的生命周期不变式
+            self._session_store = None
         try:
             for name, resource in resources:
                 if resource is None:

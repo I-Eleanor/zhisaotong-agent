@@ -7,6 +7,7 @@ from contextvars import ContextVar
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 session_id_var: ContextVar[str] = ContextVar("session_id", default="")
+user_id_var: ContextVar[str] = ContextVar("user_id", default="")
 
 
 def new_request_id() -> str:
@@ -31,3 +32,12 @@ def get_session_id() -> str:
 
 def set_session_id(sid: str) -> None:
     session_id_var.set(sid)
+
+
+def get_request_user_id() -> str:
+    """当前请求的用户 ID（API 层写入；未设置时为空字符串）。"""
+    return user_id_var.get()
+
+
+def set_request_user_id(user_id: str) -> None:
+    user_id_var.set(user_id)

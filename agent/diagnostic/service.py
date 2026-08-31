@@ -20,11 +20,15 @@ class DiagnosticAgent:
     def __init__(self, parser: LlmParser | None = None, tool_router: ToolRouter | None = None, model=None):
         self.graph = build_diagnostic_graph(parser=parser, tool_router=tool_router, model=model)
 
-    def run(self, user_query: str) -> Iterator[AgentEvent]:
-        """流式执行诊断流程，逐个产出 plan/step/replan/report 事件，最后必发 done。"""
+    def run(self, user_query: str, history: list[dict] | None = None) -> Iterator[AgentEvent]:
+        """流式执行诊断流程，逐个产出 plan/step/replan/report 事件，最后必发 done。
+
+        history：同一会话的此前对话消息（[{role, content}]），作为规划与
+        报告生成的上下文（设备数据仍由工具实时查询）。
+        """
         from agent.diagnostic.nodes import initial_state
 
-        initial = initial_state(user_query)
+        initial = initial_state(user_query, history)
         seen = 0
         try:
             for snapshot in self.graph.stream(initial, stream_mode="values"):
